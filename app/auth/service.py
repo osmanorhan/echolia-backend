@@ -5,8 +5,6 @@ import time
 import structlog
 from typing import Optional, List, Tuple
 
-from libsql_client import Client
-
 from app.auth.models import (
     RegisterRequest, PairDeviceRequest, DeviceInfo, UserInfo
 )
@@ -74,6 +72,7 @@ class AuthService:
                     now
                 ]
             )
+            self.db_manager.commit_and_sync(db, user_id)
 
             # Create tokens
             access_token = create_access_token(user_id, device_id)
@@ -132,6 +131,7 @@ class AuthService:
                     now
                 ]
             )
+            self.db_manager.commit_and_sync(db, user_id)
 
             # Create tokens
             access_token = create_access_token(user_id, device_id)
@@ -198,6 +198,7 @@ class AuthService:
                 "DELETE FROM device_info WHERE device_id = ?",
                 [device_id]
             )
+            self.db_manager.commit_and_sync(db, user_id)
 
             logger.info("device_revoked", user_id=user_id, device_id=device_id)
             return True

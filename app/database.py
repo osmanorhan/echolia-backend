@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Dict, Optional, List
 from pathlib import Path
 
-from libsql_client import create_client_sync, Client
+import libsql
 
 from app.config import settings
 
@@ -33,7 +33,7 @@ class TursoDatabaseManager:
         self.auth_token = settings.turso_auth_token
         self.embedded_replica = settings.embedded_replica
         self.sync_interval = settings.sync_interval
-        self._connections: Dict[str, Client] = {}
+        self._connections: Dict[str, any] = {}
         self.data_dir = Path(settings.data_dir)
         self.data_dir.mkdir(exist_ok=True)
 
@@ -55,8 +55,26 @@ class TursoDatabaseManager:
         """Get path for local embedded replica."""
         return str(self.data_dir / f"{db_name}.db")
 
+    def commit_and_sync(self, conn, user_id: str = None) -> None:
+        """
+        Commit changes and sync with remote if using embedded replicas.
+
+        Args:
+            conn: Database connection
+            user_id: Optional user ID for logging
+        """
+        try:
+            conn.commit()
+            if self.embedded_replica:
+                conn.sync()
+                if user_id:
+                    logger.debug("synced_after_commit", user_id=user_id)
+        except Exception as e:
+            logger.error("commit_sync_failed", user_id=user_id, error=str(e))
+            raise
+
     @lru_cache(maxsize=100)
-    def get_user_db(self, user_id: str) -> Client:
+    def get_user_db(self, user_id: str):
         """
         Get or create database client for user.
         Uses LRU cache to maintain connections for most active users.
@@ -65,7 +83,7 @@ class TursoDatabaseManager:
             user_id: User's UUID
 
         Returns:
-            Turso database client
+            Turso database connection
         """
         db_name = self._get_db_name(user_id)
 
@@ -78,28 +96,30 @@ class TursoDatabaseManager:
         try:
             if self.embedded_replica:
                 # Use embedded replica for local caching
-                client = create_client_sync(
-                    url=db_url,
-                    auth_token=self.auth_token,
+                local_path = self._get_local_replica_path(db_name)
+                conn = libsql.connect(
+                    local_path,
                     sync_url=db_url,
-                    sync_interval=self.sync_interval
+                    auth_token=self.auth_token
                 )
+                # Sync with remote database
+                conn.sync()
                 logger.info("database_connected_with_replica", user_id=user_id, db_name=db_name)
             else:
                 # Direct connection without replica
-                client = create_client_sync(
-                    url=db_url,
+                conn = libsql.connect(
+                    db_url,
                     auth_token=self.auth_token
                 )
                 logger.info("database_connected", user_id=user_id, db_name=db_name)
 
             # Store connection
-            self._connections[db_name] = client
+            self._connections[db_name] = conn
 
             # Ensure schema is up to date
-            self._ensure_schema(client, user_id)
+            self._ensure_schema(conn, user_id)
 
-            return client
+            return conn
 
         except Exception as e:
             logger.error("database_connection_failed", user_id=user_id, error=str(e))
@@ -157,28 +177,28 @@ class TursoDatabaseManager:
             logger.error("database_creation_error", user_id=user_id, error=str(e))
             raise
 
-    def _ensure_schema(self, client: Client, user_id: str) -> None:
+    def _ensure_schema(self, conn, user_id: str) -> None:
         """
         Ensure database has correct schema version.
         Runs migrations if needed.
 
         Args:
-            client: Database client
+            conn: Database connection
             user_id: User ID for logging
         """
         try:
             # Check if schema_version table exists
-            result = client.execute(
+            result = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
             )
 
             if not result.rows:
                 # No schema yet, run initial migration
                 logger.info("initializing_schema", user_id=user_id)
-                self._run_migration_v001(client)
+                self._run_migration_v001(conn)
             else:
                 # Check current version
-                result = client.execute(
+                result = conn.execute(
                     "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
                 )
 
@@ -187,13 +207,13 @@ class TursoDatabaseManager:
 
                 # Run any pending migrations
                 if current_version < 1:
-                    self._run_migration_v001(client)
+                    self._run_migration_v001(conn)
 
         except Exception as e:
             logger.error("schema_check_failed", user_id=user_id, error=str(e))
             raise
 
-    def _run_migration_v001(self, client: Client) -> None:
+    def _run_migration_v001(self, conn) -> None:
         """Run initial schema migration."""
         migration_sql = """
         -- Schema version tracking
@@ -277,7 +297,8 @@ class TursoDatabaseManager:
         VALUES (1, strftime('%s', 'now'));
         """
 
-        client.execute(migration_sql)
+        conn.execute(migration_sql)
+        conn.commit()
         logger.info("migration_v001_completed")
 
     async def list_all_user_databases(self) -> List[str]:
@@ -336,9 +357,9 @@ class TursoDatabaseManager:
 
     def close_all_connections(self) -> None:
         """Close all database connections."""
-        for db_name, client in self._connections.items():
+        for db_name, conn in self._connections.items():
             try:
-                client.close()
+                conn.close()
                 logger.info("connection_closed", db_name=db_name)
             except Exception as e:
                 logger.error("connection_close_failed", db_name=db_name, error=str(e))
