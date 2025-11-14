@@ -26,6 +26,9 @@ env/
 ENV/
 .venv
 
+# uv
+.uv/
+
 # Environment variables
 .env
 .env.local
