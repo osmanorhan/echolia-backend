@@ -10,7 +10,25 @@ Echolia Backend is a privacy-first sync and LLM inference service for the Echoli
 
 ## Development Commands
 
-### Local Development (Recommended)
+### Local Development (Recommended - using uv)
+```bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install dependencies (uv handles virtual environment automatically)
+uv sync
+
+# Run development server with auto-reload
+uv run uvicorn app.main:app --reload
+
+# Alternative: Run with Python module
+uv run python -m app.main
+
+# Access API at http://localhost:8000
+# API docs (dev only) at http://localhost:8000/docs
+```
+
+### Legacy Setup (without uv)
 ```bash
 # Setup virtual environment
 python -m venv venv
@@ -19,41 +37,41 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Run development server with auto-reload
-python -m app.main
-# OR: uvicorn app.main:app --reload
-
-# Access API at http://localhost:8000
-# API docs (dev only) at http://localhost:8000/docs
+# Run development server
+uvicorn app.main:app --reload
 ```
 
 ### Testing
 ```bash
-# Run all tests
-pytest tests/
+# Run all tests (with uv)
+uv run pytest tests/
 
 # Run specific test file
-pytest tests/test_auth.py -v
+uv run pytest tests/test_auth.py -v
 
 # Run with verbose output
-pytest -v
+uv run pytest -v
+
+# Install dev dependencies
+uv sync --extra dev
 ```
 
 ### Code Quality
 ```bash
 # Format code
-black app/
+uv run black app/
 
 # Lint code
-ruff check app/
+uv run ruff check app/
 
 # Type checking
-mypy app/
+uv run mypy app/
 ```
 
 ### Docker (Production-like)
 ```bash
 # Build and start services
+# Note: First build may take 5-10 minutes (libsql compiles from source)
 docker-compose up -d
 
 # View logs
@@ -66,6 +84,8 @@ docker-compose up -d
 
 # Access API at http://localhost:8000
 ```
+
+**Note**: Docker uses system-wide package installation via `uv pip install --system`, so the container runs `uvicorn` directly (not `uv run uvicorn`). The `uv run` command is primarily for local development where uv manages virtual environments automatically.
 
 ### Database Management
 ```bash
