@@ -1,8 +1,8 @@
 # Echolia Backend Implementation Plan
 
 **Updated**: 2025-11-15
-**Status**: Phase 1 Starting
-**Architecture**: Privacy-first, Add-ons based monetization
+**Status**: Phase 1 & 4 Complete (OAuth Auth + LLM Inference)
+**Architecture**: Privacy-first, Add-ons based monetization with free tier
 
 ## Product Philosophy
 
@@ -12,6 +12,20 @@ Echolia is an indie, privacy-first personal AI companion following Obsidian's et
 - Mobile-only purchases (App Store/Play Store)
 - Zero-knowledge encryption for all user data
 - Protest against surveillance capitalism
+
+### LLM Inference Tiers
+
+**Free Tier** (no add-on needed):
+- 10 requests/day for users with incapable devices
+- Access to all available models (Claude, GPT, Gemini)
+- Allows users to try AI features before committing to add-on
+- No credit card required
+
+**AI Add-on** ($3/month):
+- Fair usage with higher limits (500/hour, 5000/day)
+- Same model access as free tier
+- Anti-abuse limits (not paywalls)
+- Unlimited for normal use
 
 ## Architecture Overview
 
@@ -258,17 +272,19 @@ PRODUCT_IDS: dict
 
 ---
 
-### Phase 4: LLM Inference Service (AI Add-on)
+### Phase 4: LLM Inference Service ✅ COMPLETE
 
-**Goal**: Zero-knowledge LLM proxy with add-on requirement
+**Goal**: LLM proxy with two-tier access (Free + AI Add-on)
+
+**Status**: ✅ Complete
 
 **Tasks**:
-1. Create LLM service with add-on checks
-2. Implement zero-knowledge encryption/decryption
-3. Add LLM provider integrations (Anthropic, OpenAI, Google)
-4. Implement rate limiting (anti-abuse)
-5. Add AI usage quota tracking
-6. Create LLM routes
+1. ✅ Create LLM service with tier-based access control
+2. ✅ Add LLM provider integrations (Anthropic, OpenAI, Google)
+3. ✅ Implement rate limiting for both tiers (anti-abuse)
+4. ✅ Add AI usage quota tracking in master database
+5. ✅ Create LLM routes with usage statistics
+6. ✅ Track usage in per-user databases for transparency
 
 **New Files**:
 ```
@@ -322,35 +338,30 @@ AI_RATE_LIMIT_HOURLY: int = 500
 AI_RATE_LIMIT_DAILY: int = 5000
 ```
 
-**Zero-Knowledge Flow**:
+**Two-Tier Access Control**:
 ```
-Client:
-1. Generate ephemeral AES key
-2. Encrypt prompt with AES
-3. Encrypt AES key with server's public RSA key
-4. Send encrypted_prompt + encrypted_key
+Free Tier (10 requests/day):
+- No add-on required
+- All models available
+- Allows trial before purchase
+- Daily quota enforced
 
-Server:
-1. Check AI add-on active
-2. Check rate limits
-3. Decrypt AES key with server's private RSA key
-4. Decrypt prompt with AES key (in-memory only)
-5. Call LLM provider
-6. Encrypt response with same AES key
-7. Wipe everything from memory
-8. Return encrypted response
-
-Client:
-1. Decrypt response with ephemeral AES key
+AI Add-on (fair usage):
+- 500 requests/hour
+- 5000 requests/day
+- Anti-abuse limits (not paywalls)
+- Unlimited for normal use
 ```
 
 **Success Criteria**:
-- ✅ Only works with active AI add-on
-- ✅ Zero-knowledge encryption working
+- ✅ Free tier works (10 requests/day)
+- ✅ AI Add-on tier works (5000 requests/day)
 - ✅ Anthropic provider working
 - ✅ OpenAI provider working
+- ✅ Google Gemini provider working
 - ✅ Rate limiting prevents abuse
 - ✅ Usage tracked for transparency
+- ✅ Quota endpoints provide visibility
 
 ---
 
