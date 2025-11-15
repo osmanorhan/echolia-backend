@@ -1,17 +1,26 @@
 """
-Authentication service business logic.
+Authentication service business logic for OAuth-based authentication.
 """
 import time
+import uuid
 import structlog
 from typing import Optional, List, Tuple
 
 from app.auth.models import (
-    RegisterRequest, PairDeviceRequest, DeviceInfo, UserInfo
+    OAuthSignInRequest,
+    OAuthSignInResponse,
+    UserAddOns,
+    DeviceInfo,
+    UserInfoResponse,
+    RefreshTokenResponse
 )
 from app.auth.crypto import (
-    create_access_token, create_refresh_token, verify_token,
-    validate_public_key, generate_device_id, generate_user_id
+    create_access_token,
+    create_refresh_token,
+    verify_token
 )
+from app.auth.oauth_verifiers import verify_oauth_token, UserInfo as OAuthUserInfo
+from app.master_db import MasterDatabaseManager
 from app.database import TursoDatabaseManager
 
 
@@ -19,160 +28,224 @@ logger = structlog.get_logger()
 
 
 class AuthService:
-    """Authentication service for user and device management."""
+    """Authentication service for OAuth-based user and device management."""
 
-    def __init__(self, db_manager: TursoDatabaseManager):
-        self.db_manager = db_manager
-
-    async def register_user(
+    def __init__(
         self,
-        request: RegisterRequest
-    ) -> Tuple[str, str, str, str]:
+        master_db: MasterDatabaseManager,
+        user_db_manager: TursoDatabaseManager
+    ):
+        self.master_db = master_db
+        self.user_db_manager = user_db_manager
+
+    async def sign_in_with_oauth(
+        self,
+        request: OAuthSignInRequest
+    ) -> OAuthSignInResponse:
         """
-        Register a new anonymous user with their first device.
+        Sign in with OAuth (Google or Apple).
+
+        Flow:
+        1. Verify OAuth ID token with provider
+        2. Get or create user in master database
+        3. Register/update device in master database
+        4. Create per-user database if first sign-in
+        5. Generate JWT tokens
+        6. Return tokens + user info + add-ons
 
         Args:
-            request: Registration request with device info
+            request: OAuth sign-in request
 
         Returns:
-            Tuple of (user_id, device_id, access_token, refresh_token)
+            OAuth sign-in response with tokens and add-ons
         """
-        # Validate public key
-        if not validate_public_key(request.public_key):
-            raise ValueError("Invalid public key format")
+        logger.info(
+            "oauth_signin_start",
+            provider=request.provider,
+            device_id=request.device_id,
+            platform=request.platform
+        )
 
-        # Generate IDs
-        user_id = generate_user_id()
-        device_id = generate_device_id()
+        # Step 1: Verify OAuth token
+        oauth_user_info = verify_oauth_token(request.provider, request.id_token)
 
-        logger.info("registering_user", user_id=user_id, device_id=device_id)
+        if oauth_user_info is None:
+            logger.error("oauth_token_verification_failed", provider=request.provider)
+            raise ValueError(f"Invalid {request.provider} token")
 
-        try:
-            # Create user's database
-            await self.db_manager.create_user_database(user_id)
+        # Step 2: Get or create user
+        user_id = await self._get_or_create_user(oauth_user_info)
 
-            # Get user's database
-            db = self.db_manager.get_user_db(user_id)
+        # Step 3: Register device
+        self.master_db.register_device(
+            device_id=request.device_id,
+            user_id=user_id,
+            device_name=request.device_name,
+            platform=request.platform,
+            app_version=request.app_version
+        )
 
-            # Store device info
-            now = int(time.time())
-            db.execute(
-                """
-                INSERT INTO device_info
-                (device_id, device_name, device_type, platform, public_key, last_sync_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    device_id,
-                    request.device_name,
-                    request.device_type,
-                    request.platform,
-                    request.public_key,
-                    now,
-                    now
-                ]
-            )
-            self.db_manager.commit_and_sync(db, user_id)
+        # Step 4: Ensure per-user database exists
+        await self.user_db_manager.create_user_database(user_id)
 
-            # Create tokens
-            access_token = create_access_token(user_id, device_id)
-            refresh_token = create_refresh_token(user_id, device_id)
+        # Step 5: Get user's add-ons
+        add_ons_data = self.master_db.get_user_add_ons(user_id)
+        add_ons = UserAddOns(
+            sync_enabled=add_ons_data["sync_enabled"],
+            ai_enabled=add_ons_data["ai_enabled"],
+            supporter=add_ons_data["supporter"]
+        )
 
-            logger.info("user_registered", user_id=user_id, device_id=device_id)
+        # Step 6: Generate JWT tokens
+        access_token = create_access_token(user_id, request.device_id)
+        refresh_token = create_refresh_token(user_id, request.device_id)
 
-            return user_id, device_id, access_token, refresh_token
+        # Calculate expires_in (access token expiration)
+        from app.config import settings
+        expires_in = settings.access_token_expire_minutes * 60
 
-        except Exception as e:
-            logger.error("registration_failed", user_id=user_id, error=str(e))
-            raise
+        logger.info(
+            "oauth_signin_success",
+            user_id=user_id,
+            provider=request.provider,
+            device_id=request.device_id
+        )
 
-    async def pair_device(
-        self,
-        user_id: str,
-        request: PairDeviceRequest
-    ) -> Tuple[str, str, str]:
+        return OAuthSignInResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_type="bearer",
+            expires_in=expires_in,
+            user_id=user_id,
+            add_ons=add_ons
+        )
+
+    async def _get_or_create_user(self, oauth_user_info: OAuthUserInfo) -> str:
         """
-        Pair a new device to an existing user account.
+        Get existing user or create new user from OAuth info.
 
         Args:
-            user_id: User's UUID
-            request: Device pairing request
+            oauth_user_info: User info from OAuth provider
 
         Returns:
-            Tuple of (device_id, access_token, refresh_token)
+            User ID (UUID)
         """
-        # Validate public key
-        if not validate_public_key(request.public_key):
-            raise ValueError("Invalid public key format")
+        # Check if user exists
+        existing_user = self.master_db.get_user_by_provider(
+            provider=oauth_user_info.provider,
+            provider_user_id=oauth_user_info.provider_user_id
+        )
 
-        device_id = generate_device_id()
-
-        logger.info("pairing_device", user_id=user_id, device_id=device_id)
-
-        try:
-            # Get user's database
-            db = self.db_manager.get_user_db(user_id)
-
-            # Store device info
-            now = int(time.time())
-            db.execute(
-                """
-                INSERT INTO device_info
-                (device_id, device_name, device_type, platform, public_key, last_sync_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    device_id,
-                    request.device_name,
-                    request.device_type,
-                    request.platform,
-                    request.public_key,
-                    now,
-                    now
-                ]
+        if existing_user:
+            logger.info(
+                "user_found",
+                user_id=existing_user["user_id"],
+                provider=oauth_user_info.provider
             )
-            self.db_manager.commit_and_sync(db, user_id)
+            return existing_user["user_id"]
 
-            # Create tokens
-            access_token = create_access_token(user_id, device_id)
-            refresh_token = create_refresh_token(user_id, device_id)
+        # Create new user
+        user_id = str(uuid.uuid4())
 
-            logger.info("device_paired", user_id=user_id, device_id=device_id)
+        self.master_db.create_user(
+            user_id=user_id,
+            provider=oauth_user_info.provider,
+            provider_user_id=oauth_user_info.provider_user_id,
+            email=oauth_user_info.email,
+            name=oauth_user_info.name
+        )
 
-            return device_id, access_token, refresh_token
+        logger.info(
+            "user_created",
+            user_id=user_id,
+            provider=oauth_user_info.provider,
+            email=oauth_user_info.email
+        )
 
-        except Exception as e:
-            logger.error("pairing_failed", user_id=user_id, error=str(e))
-            raise
+        return user_id
 
-    def get_devices(self, user_id: str) -> List[DeviceInfo]:
+    def refresh_access_token(
+        self,
+        refresh_token_str: str
+    ) -> Optional[RefreshTokenResponse]:
+        """
+        Refresh access token using refresh token.
+
+        Args:
+            refresh_token_str: Refresh token
+
+        Returns:
+            New tokens or None if invalid
+        """
+        # Verify refresh token
+        payload = verify_token(refresh_token_str)
+
+        if not payload or payload.get("type") != "refresh":
+            logger.error("refresh_token_invalid_type")
+            return None
+
+        user_id = payload.get("sub")
+        device_id = payload.get("device_id")
+
+        if not user_id or not device_id:
+            logger.error("refresh_token_missing_claims")
+            return None
+
+        # Verify user still exists in master DB
+        user = self.master_db.get_user(user_id)
+        if not user:
+            logger.error("refresh_token_user_not_found", user_id=user_id)
+            return None
+
+        # Verify device still exists
+        devices = self.master_db.get_user_devices(user_id)
+        device_exists = any(d["device_id"] == device_id for d in devices)
+
+        if not device_exists:
+            logger.error("refresh_token_device_not_found", device_id=device_id)
+            return None
+
+        # Create new tokens
+        access_token = create_access_token(user_id, device_id)
+        new_refresh_token = create_refresh_token(user_id, device_id)
+
+        from app.config import settings
+        expires_in = settings.access_token_expire_minutes * 60
+
+        logger.info("token_refreshed", user_id=user_id, device_id=device_id)
+
+        return RefreshTokenResponse(
+            access_token=access_token,
+            refresh_token=new_refresh_token,
+            token_type="bearer",
+            expires_in=expires_in
+        )
+
+    def get_user_devices(self, user_id: str) -> List[DeviceInfo]:
         """
         Get all devices for a user.
 
         Args:
-            user_id: User's UUID
+            user_id: User UUID
 
         Returns:
-            List of device information
+            List of device info
         """
         try:
-            db = self.db_manager.get_user_db(user_id)
+            devices_data = self.master_db.get_user_devices(user_id)
 
-            result = db.execute(
-                "SELECT device_id, device_name, device_type, platform, public_key, last_sync_at, created_at FROM device_info"
-            )
-
-            devices = []
-            for row in result.rows:
-                devices.append(DeviceInfo(
-                    device_id=row[0],
-                    device_name=row[1],
-                    device_type=row[2],
-                    platform=row[3],
-                    public_key=row[4],
-                    last_sync_at=row[5],
-                    created_at=row[6]
-                ))
+            devices = [
+                DeviceInfo(
+                    device_id=d["device_id"],
+                    user_id=d["user_id"],
+                    device_name=d["device_name"],
+                    platform=d["platform"],
+                    app_version=d.get("app_version"),
+                    last_seen_at=d["last_seen_at"],
+                    created_at=d["created_at"]
+                )
+                for d in devices_data
+            ]
 
             return devices
 
@@ -180,88 +253,57 @@ class AuthService:
             logger.error("get_devices_failed", user_id=user_id, error=str(e))
             raise
 
-    async def revoke_device(self, user_id: str, device_id: str) -> bool:
+    async def delete_device(self, user_id: str, device_id: str) -> bool:
         """
-        Revoke a device's access.
+        Delete a device for a user.
 
         Args:
-            user_id: User's UUID
-            device_id: Device's UUID
+            user_id: User UUID
+            device_id: Device ID
 
         Returns:
-            True if revoked successfully
+            True if deleted successfully
         """
         try:
-            db = self.db_manager.get_user_db(user_id)
-
-            db.execute(
-                "DELETE FROM device_info WHERE device_id = ?",
-                [device_id]
-            )
-            self.db_manager.commit_and_sync(db, user_id)
-
-            logger.info("device_revoked", user_id=user_id, device_id=device_id)
-            return True
+            result = self.master_db.delete_device(device_id, user_id)
+            logger.info("device_deleted", user_id=user_id, device_id=device_id)
+            return result
 
         except Exception as e:
-            logger.error("revoke_failed", user_id=user_id, device_id=device_id, error=str(e))
-            return False
+            logger.error("delete_device_failed", user_id=user_id, error=str(e))
+            raise
 
-    def verify_device(self, user_id: str, device_id: str) -> bool:
+    def get_user_info(self, user_id: str) -> Optional[UserInfoResponse]:
         """
-        Verify that a device belongs to a user.
+        Get user information.
 
         Args:
-            user_id: User's UUID
-            device_id: Device's UUID
+            user_id: User UUID
 
         Returns:
-            True if device is valid
+            User info or None
         """
         try:
-            db = self.db_manager.get_user_db(user_id)
+            user = self.master_db.get_user(user_id)
+            if not user:
+                return None
 
-            result = db.execute(
-                "SELECT device_id FROM device_info WHERE device_id = ?",
-                [device_id]
+            add_ons_data = self.master_db.get_user_add_ons(user_id)
+            add_ons = UserAddOns(
+                sync_enabled=add_ons_data["sync_enabled"],
+                ai_enabled=add_ons_data["ai_enabled"],
+                supporter=add_ons_data["supporter"]
             )
 
-            return len(result.rows) > 0
+            return UserInfoResponse(
+                user_id=user["user_id"],
+                provider=user["provider"],
+                email=user.get("email"),
+                name=user.get("name"),
+                created_at=user["created_at"],
+                add_ons=add_ons
+            )
 
         except Exception as e:
-            logger.error("verify_device_failed", user_id=user_id, error=str(e))
-            return False
-
-    def refresh_access_token(
-        self,
-        refresh_token: str
-    ) -> Optional[Tuple[str, str]]:
-        """
-        Refresh access token using refresh token.
-
-        Args:
-            refresh_token: Refresh token
-
-        Returns:
-            Tuple of (new_access_token, new_refresh_token) or None
-        """
-        payload = verify_token(refresh_token)
-
-        if not payload or payload.get("type") != "refresh":
-            return None
-
-        user_id = payload.get("sub")
-        device_id = payload.get("device_id")
-
-        if not user_id or not device_id:
-            return None
-
-        # Verify device still exists
-        if not self.verify_device(user_id, device_id):
-            return None
-
-        # Create new tokens
-        access_token = create_access_token(user_id, device_id)
-        new_refresh_token = create_refresh_token(user_id, device_id)
-
-        return access_token, new_refresh_token
+            logger.error("get_user_info_failed", user_id=user_id, error=str(e))
+            raise

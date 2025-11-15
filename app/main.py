@@ -86,6 +86,16 @@ async def startup_event():
         debug=settings.debug
     )
 
+    # Initialize master database
+    from app.master_db import master_db_manager
+    try:
+        # Create master database if it doesn't exist
+        await master_db_manager.create_master_database()
+        logger.info("master_database_initialized")
+    except Exception as e:
+        logger.error("master_database_initialization_failed", error=str(e))
+        # Don't crash the app, but log the error
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -94,7 +104,10 @@ async def shutdown_event():
 
     # Clean up database connections
     from app.database import db_manager
+    from app.master_db import master_db_manager
+
     db_manager.close_all_connections()
+    master_db_manager.close_connection()
 
 
 if __name__ == "__main__":
