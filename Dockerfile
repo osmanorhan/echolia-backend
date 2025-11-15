@@ -5,9 +5,13 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies
+# libsql requires: g++, cmake, and build tools for Rust compilation
 RUN apt-get update && apt-get install -y \
     gcc \
+    g++ \
+    cmake \
     curl \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
