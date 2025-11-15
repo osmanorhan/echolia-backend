@@ -71,6 +71,7 @@ uv run mypy app/
 ### Docker (Production-like)
 ```bash
 # Build and start services
+# Note: First build may take 5-10 minutes (libsql compiles from source)
 docker-compose up -d
 
 # View logs
@@ -83,6 +84,8 @@ docker-compose up -d
 
 # Access API at http://localhost:8000
 ```
+
+**Note**: Docker uses system-wide package installation via `uv pip install --system`, so the container runs `uvicorn` directly (not `uv run uvicorn`). The `uv run` command is primarily for local development where uv manages virtual environments automatically.
 
 ### Database Management
 ```bash
