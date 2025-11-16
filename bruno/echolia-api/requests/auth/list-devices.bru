@@ -1,0 +1,15 @@
+meta {
+  name: List Devices
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/auth/devices
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Authorization: Bearer {{accessToken}}
+}

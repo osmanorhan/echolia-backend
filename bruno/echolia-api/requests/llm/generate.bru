@@ -1,0 +1,27 @@
+meta {
+  name: LLM Generate
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/llm/generate
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  Accept: application/json
+  Authorization: Bearer {{accessToken}}
+}
+
+body:json {
+  {
+    "model": "gpt-4o-mini",
+    "input": "Hello from Bruno",
+    "context": {
+      "workspace_id": "demo"
+    }
+  }
+}

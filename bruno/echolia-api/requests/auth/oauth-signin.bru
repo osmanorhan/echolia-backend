@@ -1,0 +1,27 @@
+meta {
+  name: OAuth Sign In
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/oauth/signin
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  Accept: application/json
+}
+
+body:json {
+  {
+    "provider": "google",
+    "id_token": "REPLACE_WITH_PROVIDER_ID_TOKEN",
+    "device_id": "{{deviceId}}",
+    "device_name": "Test Device",
+    "platform": "ios",
+    "app_version": "1.0.0"
+  }
+}
