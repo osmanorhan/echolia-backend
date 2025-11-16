@@ -1,0 +1,70 @@
+meta {
+  name: Execute Inference
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/inference/execute
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  Accept: application/json
+  Authorization: Bearer {{accessToken}}
+}
+
+body:json {
+  {
+    "task": "memory_distillation",
+    "encrypted_content": "base64_ciphertext_here",
+    "nonce": "base64_12byte_nonce",
+    "mac": "base64_16byte_mac",
+    "ephemeral_public_key": "base64_client_x25519_public_key",
+    "client_version": "1.0.0"
+  }
+}
+
+docs {
+  # Execute E2EE Inference Task
+
+  Executes an AI inference task with end-to-end encryption.
+
+  ## Tasks
+  - `memory_distillation`: Extract commitments, facts, insights, patterns, preferences
+  - `tagging`: Extract relevant tags from content
+  - `insight_extraction`: Extract deeper insights and patterns
+
+  ## E2EE Flow
+  1. Client generates ephemeral X25519 keypair
+  2. Client derives shared secret using server's public key
+  3. Client encrypts content with ChaCha20-Poly1305
+  4. Server decrypts, processes, re-encrypts response
+  5. Client decrypts response with same shared secret
+
+  ## Rate Limits
+  - Free tier: 10 requests/day
+  - AI add-on: 5000 requests/day (anti-abuse)
+
+  ## Response (200 OK)
+  ```json
+  {
+    "encrypted_result": "<base64_ciphertext>",
+    "nonce": "<base64_nonce>",
+    "mac": "<base64_mac>",
+    "usage": {
+      "requests_remaining": 7,
+      "reset_at": "2025-11-17T00:00:00Z",
+      "tier": "free"
+    }
+  }
+  ```
+
+  ## Error Responses
+  - 401: Invalid or expired token
+  - 422: Decryption failed (invalid encryption)
+  - 429: Rate limit exceeded
+  - 503: LLM backend unavailable
+}

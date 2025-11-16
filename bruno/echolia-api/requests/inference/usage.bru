@@ -1,0 +1,39 @@
+meta {
+  name: Get Usage
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/inference/usage
+  body: none
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Authorization: Bearer {{accessToken}}
+}
+
+docs {
+  # Get Inference Usage
+
+  Returns the user's current inference usage quota.
+
+  ## Response
+  ```json
+  {
+    "requests_remaining": 7,
+    "reset_at": "2025-11-17T00:00:00Z",
+    "tier": "free"
+  }
+  ```
+
+  ## Tiers
+  - `free`: 10 requests/day
+  - `paid`: 5000 requests/day (AI add-on active)
+
+  ## Notes
+  - Quota resets at midnight UTC
+  - Use this to show remaining requests in UI
+}
