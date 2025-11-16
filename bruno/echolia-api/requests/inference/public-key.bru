@@ -1,0 +1,41 @@
+meta {
+  name: Get Public Key
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/inference/public-key
+  body: none
+  auth: none
+}
+
+headers {
+  Accept: application/json
+}
+
+docs {
+  # Get Server Public Key
+
+  Returns the server's X25519 public key for E2EE key exchange.
+
+  The client uses this key to:
+  1. Generate an ephemeral keypair
+  2. Derive a shared secret with the server
+  3. Encrypt content with ChaCha20-Poly1305
+
+  ## Response
+  ```json
+  {
+    "public_key": "<base64_encoded_x25519_public_key>",
+    "key_id": "server-key-2025-11",
+    "expires_at": "2025-12-01T00:00:00Z",
+    "algorithm": "X25519"
+  }
+  ```
+
+  ## Notes
+  - Cache this key locally
+  - Refetch when key expires or app launches
+  - No authentication required
+}

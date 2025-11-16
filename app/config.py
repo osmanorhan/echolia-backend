@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     ai_rate_limit_hourly: int = 500
     ai_rate_limit_daily: int = 5000
 
+    # E2EE Inference Rate Limiting
+    inference_free_tier_daily_limit: int = 10
+    inference_paid_tier_daily_limit: int = 5000
+
     # General Rate Limiting
     rate_limit_per_minute: int = 100
     rate_limit_burst: int = 20
