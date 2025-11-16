@@ -11,6 +11,7 @@ import logging
 from app.config import settings
 from app.auth.routes import router as auth_router
 from app.llm.routes import router as llm_router
+from app.inference.routes import router as inference_router
 
 
 # Configure structured logging
@@ -57,6 +58,7 @@ app.add_middleware(
 # Include routers
 app.include_router(auth_router)
 app.include_router(llm_router)
+app.include_router(inference_router)
 
 
 @app.get("/")
