@@ -1,0 +1,876 @@
+# Echolia Backend Integration Guide
+
+**For Mobile and Desktop Development Teams**
+
+This document describes how to integrate your mobile (Flutter) and desktop (Tauri) applications with the Echolia sync backend.
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Authentication](#authentication)
+- [API Endpoints](#api-endpoints)
+- [Data Structures](#data-structures)
+- [Vector Clock Protocol](#vector-clock-protocol)
+- [Encryption Requirements](#encryption-requirements)
+- [Sync Flow](#sync-flow)
+- [Error Handling](#error-handling)
+- [Testing Checklist](#testing-checklist)
+
+---
+
+## Overview
+
+The Echolia backend provides a sync service with the following features:
+
+- **Vector clock-based conflict detection** for journal entries
+- **Timestamp-based sync** for memories and tags (last-write-wins)
+- **Soft deletes** (tombstones) for proper deletion propagation
+- **Zero-knowledge encryption** (server never sees plaintext)
+- **Subscription enforcement** (Sync add-on required)
+
+### Base URL
+
+- **Production**: `https://api.echolia.app`
+- **Development**: `http://localhost:8000`
+
+---
+
+## Authentication
+
+All sync endpoints require a valid JWT access token.
+
+### Required Header
+
+```http
+Authorization: Bearer <access_token>
+```
+
+### Getting Access Tokens
+
+Use the OAuth authentication endpoints:
+
+1. **Sign In**: `POST /auth/oauth/signin`
+   - Send Google/Apple `id_token` + device info
+   - Receive `access_token` and `refresh_token`
+
+2. **Refresh Token**: `POST /auth/refresh`
+   - Send `refresh_token`
+   - Receive new `access_token`
+
+See authentication documentation for details.
+
+---
+
+## API Endpoints
+
+### 1. Get Sync Status
+
+Check sync statistics and subscription status.
+
+```http
+GET /sync/status
+Authorization: Bearer <access_token>
+```
+
+**Response** (200 OK):
+```json
+{
+  "user_id": "user-uuid",
+  "total_entries": 150,
+  "total_memories": 45,
+  "total_tags": 89,
+  "last_sync_at": 1704153600,
+  "device_count": 3,
+  "sync_enabled": true
+}
+```
+
+**Response Fields:**
+- `user_id`: User's UUID
+- `total_entries`: Number of entries on server (excluding deleted)
+- `total_memories`: Number of memories on server (excluding deleted)
+- `total_tags`: Number of tags on server (excluding deleted)
+- `last_sync_at`: Unix timestamp of last sync (null if never synced)
+- `device_count`: Number of registered devices
+- `sync_enabled`: Whether sync add-on is active (subscription status)
+
+**Error Responses:**
+- `401 Unauthorized`: Invalid/expired access token
+- `500 Internal Server Error`: Server error
+
+---
+
+### 2. Push Local Changes
+
+Send local changes to the server.
+
+```http
+POST /sync/push
+Authorization: Bearer <access_token>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "entries": [
+    {
+      "id": "entry-123",
+      "device_id": "device-abc",
+      "encrypted_data": "base64_encoded_encrypted_blob",
+      "version": 5,
+      "vector_clock": {
+        "device-abc": 5,
+        "device-xyz": 3
+      },
+      "is_deleted": false,
+      "created_at": 1704067200,
+      "updated_at": 1704153600
+    }
+  ],
+  "memories": [
+    {
+      "id": "memory-456",
+      "encrypted_data": "base64_encoded_encrypted_blob",
+      "version": 2,
+      "is_deleted": false,
+      "created_at": 1704067200,
+      "updated_at": 1704153600
+    }
+  ],
+  "tags": [
+    {
+      "id": "tag-789",
+      "entry_id": "entry-123",
+      "encrypted_data": "base64_encoded_encrypted_blob",
+      "version": 1,
+      "is_deleted": false,
+      "created_at": 1704067200,
+      "updated_at": 1704153600
+    }
+  ],
+  "last_sync_at": 1704067200
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "accepted_entries": 5,
+  "accepted_memories": 2,
+  "accepted_tags": 3,
+  "conflicts": [
+    {
+      "item_type": "entry",
+      "item_id": "entry-123",
+      "server_version": {
+        "encrypted_data": "base64_server_version",
+        "version": 6,
+        "vector_clock": {"device-xyz": 6},
+        "is_deleted": false,
+        "created_at": 1704067200,
+        "updated_at": 1704160000
+      },
+      "client_version": {
+        "encrypted_data": "base64_client_version",
+        "version": 5,
+        "vector_clock": {"device-abc": 5},
+        "is_deleted": false,
+        "created_at": 1704067200,
+        "updated_at": 1704153600
+      },
+      "conflict_reason": "concurrent_modification"
+    }
+  ],
+  "server_time": 1704153600
+}
+```
+
+**Response Fields:**
+- `accepted_entries`: Number of entries successfully accepted
+- `accepted_memories`: Number of memories successfully accepted
+- `accepted_tags`: Number of tags successfully accepted
+- `conflicts`: Array of conflicts detected (requires client resolution)
+- `server_time`: Server's current Unix timestamp (use as new `last_sync_at`)
+
+**Conflict Reasons:**
+- `"concurrent_modification"`: Vector clocks indicate concurrent edits
+- `"server_version_newer"`: Server has a newer version
+
+**Error Responses:**
+- `401 Unauthorized`: Invalid/expired access token
+- `403 Forbidden`: Sync add-on not active (subscription required)
+- `400 Bad Request`: Invalid request format
+- `500 Internal Server Error`: Server error
+
+---
+
+### 3. Pull Remote Changes
+
+Get all changes from server since last sync.
+
+```http
+POST /sync/pull
+Authorization: Bearer <access_token>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "last_sync_at": 1704067200,
+  "device_id": "device-abc"
+}
+```
+
+**Request Fields:**
+- `last_sync_at`: Unix timestamp of last successful sync (use 0 for first sync)
+- `device_id`: Your device ID (for filtering in future enhancements)
+
+**Response** (200 OK):
+```json
+{
+  "entries": [
+    {
+      "id": "entry-456",
+      "device_id": "device-xyz",
+      "encrypted_data": "base64_encoded_encrypted_blob",
+      "version": 3,
+      "vector_clock": {
+        "device-xyz": 3
+      },
+      "is_deleted": false,
+      "created_at": 1704067200,
+      "updated_at": 1704153600
+    }
+  ],
+  "memories": [],
+  "tags": [],
+  "server_time": 1704153600,
+  "has_more": false
+}
+```
+
+**Response Fields:**
+- `entries`: Array of entries updated since `last_sync_at`
+- `memories`: Array of memories updated since `last_sync_at`
+- `tags`: Array of tags updated since `last_sync_at`
+- `server_time`: Server's current Unix timestamp (save as new `last_sync_at`)
+- `has_more`: Pagination flag (currently always false)
+
+**Error Responses:**
+- `401 Unauthorized`: Invalid/expired access token
+- `403 Forbidden`: Sync add-on not active
+- `400 Bad Request`: Invalid request format
+- `500 Internal Server Error`: Server error
+
+---
+
+## Data Structures
+
+### Entry Object
+
+```json
+{
+  "id": "string (UUID)",
+  "device_id": "string (device identifier)",
+  "encrypted_data": "string (base64-encoded encrypted blob)",
+  "version": "integer (entry version number)",
+  "vector_clock": {
+    "device-id-1": "integer (version)",
+    "device-id-2": "integer (version)"
+  },
+  "is_deleted": "boolean (soft delete flag)",
+  "created_at": "integer (Unix timestamp)",
+  "updated_at": "integer (Unix timestamp)"
+}
+```
+
+**Field Requirements:**
+- `id`: Must be unique across all entries (use UUID v4)
+- `device_id`: Device that created/last modified this entry
+- `encrypted_data`: Client-side encrypted content (see Encryption Requirements)
+- `version`: Increment on every local edit
+- `vector_clock`: Map of device_id → version (see Vector Clock Protocol)
+- `is_deleted`: `true` for deleted items (soft delete), `false` for active
+- `created_at`: Unix timestamp (seconds since epoch)
+- `updated_at`: Unix timestamp (seconds since epoch)
+
+### Memory Object
+
+```json
+{
+  "id": "string (UUID)",
+  "encrypted_data": "string (base64-encoded encrypted blob)",
+  "version": "integer (memory version number)",
+  "is_deleted": "boolean (soft delete flag)",
+  "created_at": "integer (Unix timestamp)",
+  "updated_at": "integer (Unix timestamp)"
+}
+```
+
+**Field Requirements:**
+- No `device_id` or `vector_clock` (timestamp-based sync)
+- Server uses `updated_at` for conflict resolution (last-write-wins)
+
+### Tag Object
+
+```json
+{
+  "id": "string (UUID)",
+  "entry_id": "string (UUID of associated entry)",
+  "encrypted_data": "string (base64-encoded encrypted blob)",
+  "version": "integer (tag version number)",
+  "is_deleted": "boolean (soft delete flag)",
+  "created_at": "integer (Unix timestamp)",
+  "updated_at": "integer (Unix timestamp)"
+}
+```
+
+**Field Requirements:**
+- `entry_id`: Must reference a valid entry
+- No `device_id` or `vector_clock` (timestamp-based sync)
+
+---
+
+## Vector Clock Protocol
+
+### What Are Vector Clocks?
+
+Vector clocks enable the backend to detect concurrent modifications across multiple devices.
+
+### Structure
+
+A vector clock is a JSON object mapping device IDs to version numbers:
+
+```json
+{
+  "device-abc": 5,
+  "device-xyz": 3,
+  "device-123": 1
+}
+```
+
+### Client Requirements
+
+**1. On Creating New Entry:**
+```json
+{
+  "device-your-id": 1
+}
+```
+Initialize with your device ID at version 1.
+
+**2. On Editing Local Entry:**
+```json
+// Before: {"device-your-id": 5}
+// After:  {"device-your-id": 6}
+```
+Increment the version for YOUR device ID.
+
+**3. On Receiving Remote Entry:**
+```json
+// Local:  {"device-a": 5, "device-b": 2}
+// Remote: {"device-a": 3, "device-b": 4}
+// Merged: {"device-a": 5, "device-b": 4}
+```
+Take the **maximum** version for each device.
+
+### Server Conflict Detection
+
+The server compares vector clocks:
+
+- **Greater**: Remote happened after local → Server accepts your change
+- **Less**: Local happened before remote → Server rejects (conflict returned)
+- **Equal**: Same version → No change needed
+- **Concurrent**: Neither is greater → **CONFLICT!**
+
+**Example of Concurrent Conflict:**
+```json
+// Device A: {"device-a": 5, "device-b": 2}
+// Device B: {"device-a": 3, "device-b": 4}
+// Result: Concurrent modification detected → Conflict returned
+```
+
+### What You Must Implement
+
+1. **Increment vector clock** when user edits entry locally
+2. **Merge vector clocks** when receiving remote entries (take max)
+3. **Handle conflicts** returned by `/sync/push`
+
+---
+
+## Encryption Requirements
+
+### Zero-Knowledge Principle
+
+The server **never sees plaintext content**. All user data must be encrypted client-side before syncing.
+
+### Encryption Scheme
+
+**Algorithm**: AES-256-GCM (Authenticated Encryption)
+
+**Key Derivation**:
+- Use PBKDF2 with SHA-256
+- Input: User's OAuth identity (`user_id` + `provider`)
+- Salt: Fixed value (e.g., `"echolia_salt_v1"`)
+- Iterations: 100,000+
+- Output: 32-byte key
+
+**Encryption Process**:
+1. Serialize data to JSON
+2. Encrypt JSON with AES-256-GCM
+3. Generate random 12-byte nonce
+4. Combine: `nonce (12 bytes) + ciphertext + auth_tag (16 bytes)`
+5. Base64-encode the combined blob
+6. Store in `encrypted_data` field
+
+**Decryption Process**:
+1. Base64-decode `encrypted_data`
+2. Split: nonce (first 12 bytes), ciphertext + tag (remaining)
+3. Decrypt with AES-256-GCM
+4. Deserialize JSON to object
+
+### What You Must Implement
+
+1. **Key derivation** from user's OAuth identity (deterministic)
+2. **Encrypt all content** before calling `/sync/push`
+3. **Decrypt all content** after receiving from `/sync/pull`
+4. **Never send encryption keys** to server
+
+### Security Notes
+
+- Use a battle-tested crypto library (don't implement crypto yourself)
+- Generate a **unique nonce** for every encryption
+- Store nonce with ciphertext (prepend to blob)
+- Verify authentication tag on decryption
+
+---
+
+## Sync Flow
+
+### Recommended Sync Process
+
+```
+1. Pull changes from server
+   └─ POST /sync/pull with last_sync_at
+
+2. Merge pulled changes into local database
+   └─ For entries: Compare vector clocks
+   └─ For memories/tags: Compare timestamps
+   └─ Update vector clocks (take max)
+
+3. Push local changes to server
+   └─ POST /sync/push with unsynced items
+
+4. Handle conflicts (if any)
+   └─ Server returns conflicts array
+   └─ Show UI to user or auto-resolve
+
+5. Update last_sync_at
+   └─ Save server_time from response
+```
+
+### Initial Sync (First Time)
+
+```http
+# Step 1: Check status
+GET /sync/status
+→ Response: last_sync_at = null
+
+# Step 2: Pull everything
+POST /sync/pull
+Body: {"last_sync_at": 0, "device_id": "your-device-id"}
+→ Response: All remote data
+
+# Step 3: Push all local data
+POST /sync/push
+Body: {entries: [...], memories: [...], tags: [...]}
+
+# Step 4: Save server_time as last_sync_at
+```
+
+### Incremental Sync (Subsequent)
+
+```http
+# Step 1: Pull changes since last sync
+POST /sync/pull
+Body: {"last_sync_at": 1704067200, "device_id": "your-device-id"}
+
+# Step 2: Merge into local database
+
+# Step 3: Push local changes
+POST /sync/push
+Body: {entries: [...], memories: [...], tags: [...]}
+
+# Step 4: Update last_sync_at with server_time
+```
+
+### Sync Triggers
+
+Recommended times to sync:
+- **App foreground** (after 5+ minutes in background)
+- **After significant local changes** (batch of 10+ edits)
+- **Periodic background** (every 15-30 minutes if app active)
+- **Manual sync button** in settings
+- **Before critical operations** (export, backup)
+
+---
+
+## Soft Deletes (Tombstones)
+
+### How Deletions Work
+
+The backend uses **soft deletes** to propagate deletions across devices.
+
+### When User Deletes Entry
+
+**Don't hard delete!** Instead:
+
+1. Set `is_deleted = true`
+2. Update `updated_at` to current timestamp
+3. Increment `version` and `vector_clock`
+4. Keep item in local database
+5. Push to server on next sync
+
+**Example:**
+```json
+{
+  "id": "entry-123",
+  "device_id": "device-abc",
+  "encrypted_data": "base64_blob",
+  "version": 6,
+  "vector_clock": {"device-abc": 6},
+  "is_deleted": true,           // ← Soft delete flag
+  "created_at": 1704067200,
+  "updated_at": 1704160000       // ← Updated timestamp
+}
+```
+
+### When Receiving Deleted Entry
+
+1. Server sends entry with `is_deleted = true`
+2. Mark local copy as deleted
+3. Hide from UI
+4. Keep in database (don't hard delete)
+
+### Garbage Collection
+
+**Optional**: After 30+ days, permanently delete items where `is_deleted = true`.
+
+This prevents the local database from growing indefinitely with tombstones.
+
+---
+
+## Conflict Resolution
+
+### When Conflicts Occur
+
+The server returns conflicts in `/sync/push` response when:
+
+1. **Concurrent modifications** detected (vector clocks)
+2. **Server version is newer** than client version
+
+### Conflict Object Structure
+
+```json
+{
+  "item_type": "entry",
+  "item_id": "entry-123",
+  "server_version": {
+    "encrypted_data": "base64_server_blob",
+    "version": 6,
+    "vector_clock": {"device-xyz": 6},
+    "is_deleted": false,
+    "created_at": 1704067200,
+    "updated_at": 1704160000
+  },
+  "client_version": {
+    "encrypted_data": "base64_client_blob",
+    "version": 5,
+    "vector_clock": {"device-abc": 5},
+    "is_deleted": false,
+    "created_at": 1704067200,
+    "updated_at": 1704153600
+  },
+  "conflict_reason": "concurrent_modification"
+}
+```
+
+### Resolution Strategies
+
+**Option 1: Accept Server Version**
+- Replace local entry with `server_version`
+- Merge vector clocks
+- Mark as synced
+
+**Option 2: Keep Local Version**
+- Merge vector clocks with `server_version.vector_clock`
+- Increment your device's version
+- Re-push on next sync
+
+**Option 3: Manual Merge**
+- Decrypt both versions
+- Show UI to user
+- Let user choose or merge content
+- Create new version with merged content
+
+**Recommended**: For auto-save entries, accept server version. For explicit user edits, show conflict UI.
+
+---
+
+## Error Handling
+
+### HTTP Status Codes
+
+- **200 OK**: Request successful
+- **400 Bad Request**: Invalid request format (check request body)
+- **401 Unauthorized**: Invalid/expired access token → Refresh token
+- **403 Forbidden**: Sync add-on not active → Prompt user to subscribe
+- **500 Internal Server Error**: Server error → Retry with backoff
+
+### Error Response Format
+
+```json
+{
+  "detail": "Error message here"
+}
+```
+
+### Common Errors
+
+**1. Sync Add-on Required (403)**
+```json
+{
+  "detail": "Sync add-on required. Please subscribe to enable cross-device sync."
+}
+```
+**Solution**: Show in-app purchase UI for Sync add-on ($2/month)
+
+**2. Unauthorized (401)**
+```json
+{
+  "detail": "Could not validate credentials"
+}
+```
+**Solution**: Call `/auth/refresh` to get new access token, or re-authenticate
+
+**3. Invalid Request (400)**
+```json
+{
+  "detail": "Validation error: ..."
+}
+```
+**Solution**: Check request body format matches API specification
+
+### Retry Logic
+
+Implement exponential backoff for network errors:
+
+```
+Attempt 1: Immediate
+Attempt 2: Wait 1 second
+Attempt 3: Wait 2 seconds
+Attempt 4: Wait 4 seconds
+Max attempts: 3-4
+```
+
+Don't retry on `400`, `401`, or `403` (client errors).
+
+---
+
+## Limits and Quotas
+
+- **Max payload size**: 50 MB per request
+- **Max items per sync**: 1000 items (entries + memories + tags combined)
+- **Rate limit**: 100 requests per hour per user
+
+If you exceed limits:
+- **413 Payload Too Large**: Batch into smaller requests
+- **429 Too Many Requests**: Back off and retry later
+
+---
+
+## Testing Checklist
+
+### Basic Sync Tests
+
+- [ ] **Single device sync**
+  - Create entry locally
+  - Call `/sync/push`
+  - Verify `accepted_entries = 1`
+  - Call `/sync/pull` on same device
+  - Verify entry returned
+
+- [ ] **Multi-device sync**
+  - Create entry on device A, push
+  - Pull on device B
+  - Verify entry appears on device B
+  - Edit on device B, push
+  - Pull on device A
+  - Verify edit synced
+
+- [ ] **Soft deletes**
+  - Delete entry on device A (set `is_deleted = true`)
+  - Push deletion
+  - Pull on device B
+  - Verify entry marked deleted (not hard deleted)
+
+### Conflict Tests
+
+- [ ] **Concurrent edits**
+  - Edit entry on device A (offline)
+  - Edit same entry on device B (offline)
+  - Push from device A → Success
+  - Push from device B → Conflict returned
+  - Verify conflict details in response
+
+- [ ] **Vector clock merge**
+  - Create entry on device A: `{"device-a": 1}`
+  - Pull on device B
+  - Edit on both devices
+  - Verify vector clocks merge correctly
+
+### Edge Cases
+
+- [ ] **Large dataset**
+  - Create 5000 entries
+  - Push in batches (1000 per request)
+  - Verify all synced
+
+- [ ] **Offline edits**
+  - Go offline
+  - Edit 100 entries locally
+  - Go online
+  - Push all changes
+  - Verify all accepted
+
+- [ ] **Subscription enforcement**
+  - Disable sync add-on (expire subscription)
+  - Call `/sync/push`
+  - Verify `403 Forbidden` response
+
+### Security Tests
+
+- [ ] **Encryption verification**
+  - Create entry with sensitive content
+  - Inspect network traffic
+  - Verify `encrypted_data` is base64 gibberish
+  - Server logs should never show plaintext
+
+- [ ] **Invalid token**
+  - Use expired/invalid access token
+  - Call any sync endpoint
+  - Verify `401 Unauthorized`
+
+---
+
+## Example API Calls
+
+### Using cURL
+
+**Get Sync Status:**
+```bash
+curl -X GET https://api.echolia.app/sync/status \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Push Changes:**
+```bash
+curl -X POST https://api.echolia.app/sync/push \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entries": [{
+      "id": "entry-123",
+      "device_id": "device-abc",
+      "encrypted_data": "YmFzZTY0X2VuY29kZWRfYmxvYg==",
+      "version": 1,
+      "vector_clock": {"device-abc": 1},
+      "is_deleted": false,
+      "created_at": 1704067200,
+      "updated_at": 1704067200
+    }],
+    "memories": [],
+    "tags": []
+  }'
+```
+
+**Pull Changes:**
+```bash
+curl -X POST https://api.echolia.app/sync/pull \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "last_sync_at": 1704067200,
+    "device_id": "device-abc"
+  }'
+```
+
+---
+
+## Support
+
+For questions or issues:
+
+- **GitHub**: https://github.com/osmanorhan/echolia-backend
+- **API Documentation**: See `/docs` endpoint (development only)
+- **Backend Team**: backend@echolia.app
+
+---
+
+## Summary for Integration
+
+### Mobile Team (Flutter)
+
+**Must Implement:**
+1. HTTP client for API calls (with Authorization header)
+2. Local SQLite database for entries, memories, tags
+3. AES-256-GCM encryption service
+4. Vector clock increment/merge logic
+5. Sync manager (pull → merge → push flow)
+6. Conflict resolution UI
+7. Background sync task (periodic)
+
+**Your Choices:**
+- Database schema (as long as you can store encrypted_data, vector_clock, etc.)
+- UI/UX for conflict resolution
+- Sync frequency and triggers
+- State management approach
+
+### Desktop Team (Tauri)
+
+**Must Implement:**
+1. HTTP client for API calls (with Authorization header)
+2. Local database for entries, memories, tags
+3. AES-256-GCM encryption service
+4. Vector clock increment/merge logic
+5. Sync manager (pull → merge → push flow)
+6. Conflict resolution UI
+7. Background sync task (periodic)
+
+**Your Choices:**
+- Database technology (SQLite, IndexedDB, etc.)
+- Frontend framework (React, Vue, Svelte)
+- UI/UX for conflict resolution
+- Sync frequency and triggers
+
+### Critical Requirements (Both Teams)
+
+✅ **Always pull before push** (minimize conflicts)
+✅ **Increment vector clock** on every local edit
+✅ **Merge vector clocks** when pulling (take max)
+✅ **Encrypt all content** client-side (zero-knowledge)
+✅ **Use soft deletes** (is_deleted flag)
+✅ **Save server_time** as last_sync_at after sync
+✅ **Handle 403** by prompting for subscription
+
+---
+
+## Version
+
+- **Backend API Version**: 1.0.0
+- **Last Updated**: 2024-11-18
+- **Breaking Changes**: None (initial release)

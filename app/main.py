@@ -14,6 +14,7 @@ from app.llm.routes import router as llm_router
 from app.inference.routes import router as inference_router
 from app.add_ons.routes import router as add_ons_router
 from app.payments.routes import router as payments_router
+from app.sync.routes import router as sync_router
 
 
 # Configure structured logging
@@ -61,6 +62,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(add_ons_router)
 app.include_router(payments_router)
+app.include_router(sync_router)
 app.include_router(llm_router)
 app.include_router(inference_router)
 
