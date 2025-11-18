@@ -6,7 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Echolia Backend is a privacy-first sync and LLM inference service for the Echolia desktop and mobile apps. It uses **OAuth-based authentication** (Google + Apple Sign-In) with a **dual-database architecture**: a master database for users/subscriptions and per-user databases for encrypted data.
 
-**Current Status**: Phase 1 complete (OAuth authentication, master database, add-ons infrastructure). Sync, LLM, payments, and embeddings services are planned but not yet implemented.
+**Current Status**:
+- ✅ Phase 1 Complete: OAuth authentication, master database, add-ons infrastructure
+- ✅ Phase 4 Complete: E2EE inference service with X25519 + ChaCha20-Poly1305 encryption
+- 🚧 Planned: Sync service, payment verification, embeddings service
 
 **Product Philosophy**: Indie, privacy-first AI companion following Obsidian's ethical monetization model. Base app works fully offline; optional add-ons (Sync $2/mo, AI $3/mo) enhance experience. No paywalls, no dark patterns.
 
@@ -185,9 +188,22 @@ app/
 │   ├── crypto.py        # JWT generation and verification
 │   ├── oauth_verifiers.py # Google + Apple token verification
 │   └── dependencies.py  # FastAPI dependencies
+├── inference/           # E2EE Inference (COMPLETE - Phase 4)
+│   ├── service.py       # E2EE inference business logic
+│   ├── routes.py        # Inference endpoints
+│   ├── models.py        # Pydantic models
+│   ├── crypto.py        # X25519 + ChaCha20-Poly1305 crypto
+│   └── tasks.py         # LLM task processing
+├── llm/                 # LLM provider abstraction (COMPLETE - Phase 4)
+│   ├── service.py       # LLM routing and provider management
+│   ├── routes.py        # LLM endpoints
+│   ├── models.py        # Pydantic models
+│   └── providers/       # Provider implementations
+│       ├── anthropic.py # Claude integration
+│       ├── openai.py    # GPT integration
+│       └── google.py    # Gemini integration
 ├── add_ons/             # Add-ons module (TODO - Phase 2)
 ├── payments/            # Payment verification (TODO - Phase 3)
-├── llm/                 # LLM proxy (TODO - Phase 4)
 ├── sync/                # Sync service (TODO - Phase 5)
 └── embeddings/          # Fallback embeddings (TODO - Phase 6)
 ```
@@ -207,8 +223,13 @@ All configuration is managed via Pydantic Settings in `app/config.py`:
 - `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` - Apple Sign In credentials
 
 **Optional**:
-- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` - LLM providers (Phase 4)
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` - LLM providers (E2EE inference)
 - `APPLE_SHARED_SECRET`, `GOOGLE_SERVICE_ACCOUNT_JSON` - Payment verification (Phase 3)
+
+**E2EE Inference Settings** (with defaults):
+- `INFERENCE_FREE_TIER_DAILY_LIMIT` - Free tier daily limit (default: 10)
+- `INFERENCE_PAID_TIER_DAILY_LIMIT` - AI add-on daily limit (default: 5000)
+- `DATA_DIR` - Directory for inference key storage (default: ./data)
 
 **Access via**: `from app.config import settings`
 
@@ -317,6 +338,47 @@ GET    /auth/devices            List user's devices
 DELETE /auth/device/{id}        Delete device
 GET    /auth/me                 Get current user info
 ```
+
+### E2EE Inference (IMPLEMENTED)
+```
+GET    /inference/public-key    Get server's X25519 public key for E2EE
+POST   /inference/execute       Execute AI inference task with E2EE
+GET    /inference/usage         Get user's inference quota and usage
+```
+
+**Available Tasks**:
+- `memory_distillation`: Extract commitments, facts, insights, patterns, preferences from journal entries
+- `tagging`: Extract relevant tags from content
+- `insight_extraction`: Extract deeper insights and patterns
+
+**E2EE Flow**:
+1. Client fetches server's X25519 public key from `/inference/public-key`
+2. Client generates ephemeral X25519 keypair
+3. Client derives shared secret using X25519 key exchange
+4. Client encrypts content with ChaCha20-Poly1305 (shared secret as key)
+5. Client sends encrypted request to `/inference/execute`
+6. Server derives same shared secret, decrypts, processes with LLM
+7. Server encrypts response with same shared secret
+8. Client decrypts response (server never sees plaintext)
+
+**Rate Limits**:
+- Free tier: 10 requests/day
+- AI add-on: 5000 requests/day (anti-abuse)
+- Quota resets at midnight UTC
+
+**Key Files**:
+- `app/inference/routes.py` - FastAPI endpoints
+- `app/inference/service.py` - E2EE inference business logic
+- `app/inference/crypto.py` - X25519 + ChaCha20-Poly1305 crypto
+- `app/inference/tasks.py` - LLM task processing
+- `app/inference/models.py` - Pydantic models
+
+**Security Features**:
+- X25519 key exchange (perfect forward secrecy)
+- ChaCha20-Poly1305 AEAD encryption
+- No plaintext logging (zero-knowledge)
+- Key rotation every 30 days
+- Server cannot read user content
 
 ### Add-Ons (Phase 2 - Not Implemented)
 ```
@@ -464,6 +526,142 @@ else:
     raise HTTPException(status_code=403, detail="AI add-on required")
 ```
 
+### Using E2EE Inference Service
+
+The E2EE inference service is accessed through the `/inference` endpoints:
+
+```python
+from app.inference.service import get_inference_service
+
+# Get the inference service instance
+service = get_inference_service()
+
+# Get server's public key for client-side encryption
+public_key_info = service.get_public_key()
+# Returns: {public_key, key_id, expires_at, algorithm}
+
+# Check user's usage quota
+usage = service.get_usage_info(user_id)
+# Returns: UsageInfo(requests_remaining, reset_at, tier)
+
+# Execute E2EE inference (called from route handler)
+from app.inference.models import E2EEInferenceRequest, InferenceTask
+
+request = E2EEInferenceRequest(
+    task=InferenceTask.MEMORY_DISTILLATION,
+    encrypted_content="base64_ciphertext",
+    nonce="base64_nonce",
+    mac="base64_mac",
+    ephemeral_public_key="base64_client_public_key",
+    client_version="1.0.0"
+)
+
+response = await service.execute_inference(user_id, request)
+# Returns: E2EEInferenceResponse(encrypted_result, nonce, mac, usage)
+```
+
+**Client-Side E2EE Flow** (for mobile/desktop apps):
+
+1. **Get Server Public Key**:
+```python
+# GET /inference/public-key
+server_key = requests.get(f"{api_url}/inference/public-key").json()
+```
+
+2. **Generate Ephemeral Keypair** (client-side):
+```python
+from cryptography.hazmat.primitives.asymmetric import x25519
+
+# Client generates ephemeral keypair
+client_private = x25519.X25519PrivateKey.generate()
+client_public = client_private.public_key()
+```
+
+3. **Derive Shared Secret** (client-side):
+```python
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+# Decode server's public key
+server_public = x25519.X25519PublicKey.from_public_bytes(
+    base64.b64decode(server_key["public_key"])
+)
+
+# Perform key exchange
+shared_secret = client_private.exchange(server_public)
+
+# Derive encryption key with HKDF
+hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
+            info=b"echolia-inference-v1")
+encryption_key = hkdf.derive(shared_secret)
+```
+
+4. **Encrypt Content** (client-side):
+```python
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+import secrets
+
+# Generate random nonce
+nonce = secrets.token_bytes(12)
+
+# Encrypt
+chacha = ChaCha20Poly1305(encryption_key)
+ciphertext_with_tag = chacha.encrypt(nonce, plaintext.encode(), None)
+
+# Split ciphertext and MAC
+ciphertext = ciphertext_with_tag[:-16]
+mac = ciphertext_with_tag[-16:]
+```
+
+5. **Send Request**:
+```python
+# POST /inference/execute
+response = requests.post(
+    f"{api_url}/inference/execute",
+    headers={"Authorization": f"Bearer {access_token}"},
+    json={
+        "task": "memory_distillation",
+        "encrypted_content": base64.b64encode(ciphertext).decode(),
+        "nonce": base64.b64encode(nonce).decode(),
+        "mac": base64.b64encode(mac).decode(),
+        "ephemeral_public_key": base64.b64encode(
+            client_public.public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw
+            )
+        ).decode(),
+        "client_version": "1.0.0"
+    }
+).json()
+```
+
+6. **Decrypt Response** (client-side):
+```python
+# Decrypt with SAME shared secret/encryption key
+response_ciphertext = base64.b64decode(response["encrypted_result"])
+response_nonce = base64.b64decode(response["nonce"])
+response_mac = base64.b64decode(response["mac"])
+
+chacha = ChaCha20Poly1305(encryption_key)
+plaintext_result = chacha.decrypt(
+    response_nonce,
+    response_ciphertext + response_mac,
+    None
+)
+
+# Parse result JSON
+import json
+result = json.loads(plaintext_result.decode())
+# For memory_distillation: {memories: [{type, content, confidence}, ...]}
+```
+
+**Security Notes**:
+- Server never sees plaintext content (zero-knowledge)
+- Each request uses a fresh ephemeral keypair (perfect forward secrecy)
+- ChaCha20-Poly1305 provides authenticated encryption (AEAD)
+- Server's X25519 key rotates every 30 days
+- No plaintext is ever logged on the server
+
 ## Security Considerations
 
 - **Never log sensitive data**: No tokens, keys, or unencrypted user content in logs
@@ -478,14 +676,15 @@ else:
 
 See `IMPLEMENTATION_PLAN.md` for detailed implementation roadmap.
 
-**Current Status**: Phase 1 Complete (OAuth Authentication)
+**Current Status**:
+- ✅ Phase 1 Complete: OAuth Authentication
+- ✅ Phase 4 Complete: E2EE Inference Service (Zero-Knowledge)
 
 **Next Steps**:
 1. Phase 2: Add-Ons Management System
 2. Phase 3: Payment Verification (App Store + Play Store)
-3. Phase 4: LLM Inference Service (Zero-Knowledge)
-4. Phase 5: Sync Service
-5. Phase 6: Embeddings Service
+3. Phase 5: Sync Service
+4. Phase 6: Embeddings Service
 
 ## Deployment
 
