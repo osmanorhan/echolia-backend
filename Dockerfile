@@ -20,7 +20,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Copy dependency files
 COPY pyproject.toml ./
 COPY requirements.txt ./
-COPY README.md ./
+COPY CLAUDE.md ./
 
 # Install Python dependencies with uv
 RUN uv pip install --system -r requirements.txt

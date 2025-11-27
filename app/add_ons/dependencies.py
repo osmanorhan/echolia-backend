@@ -69,13 +69,13 @@ async def require_ai_addon(
     Dependency that requires active AI add-on.
 
     Note: This is primarily for future premium AI features.
-    The /llm/generate endpoint has its own tier-based access control
+    The E2EE inference endpoint handles its own tier-based access control
     (free tier: 10/day, AI add-on: 5000/day).
 
     Use this dependency for routes that strictly require AI add-on:
 
     ```python
-    @router.post("/llm/premium-feature")
+    @router.post("/inference/premium-feature")
     async def premium_feature(
         _: None = Depends(require_ai_addon),
         current_user: Tuple[str, str] = Depends(get_current_user)

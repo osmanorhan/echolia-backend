@@ -12,6 +12,7 @@ class InferenceTask(str, Enum):
     MEMORY_DISTILLATION = "memory_distillation"
     TAGGING = "tagging"
     INSIGHT_EXTRACTION = "insight_extraction"
+    CAPTURE_METADATA = "capture_metadata"
 
 
 class PublicKeyResponse(BaseModel):
@@ -20,6 +21,12 @@ class PublicKeyResponse(BaseModel):
     key_id: str = Field(..., description="Key identifier for rotation")
     expires_at: str = Field(..., description="ISO 8601 timestamp of key expiration")
     algorithm: str = Field(default="X25519", description="Key exchange algorithm")
+
+
+class ProviderInfo(BaseModel):
+    """Current inference provider and model selection."""
+    provider: Optional[str]
+    model: Optional[str]
 
 
 class E2EEInferenceRequest(BaseModel):
@@ -54,6 +61,32 @@ class RateLimitErrorResponse(BaseModel):
 
 
 # === Task Output Models ===
+
+class CaptureIntent(str, Enum):
+    """Intent detected from captured content."""
+    QUESTION = "question"
+    REMINDER = "reminder"
+    TASK = "task"
+    NOTE = "note"
+    REFLECTION = "reflection"
+    QUOTE = "quote"
+    IDEA = "idea"
+
+
+class CaptureMetadataResult(BaseModel):
+    """Result from capture metadata extraction task."""
+    intent: CaptureIntent
+    extracted_question: Optional[str] = Field(None, alias="extractedQuestion")
+    extracted_task: Optional[str] = Field(None, alias="extractedTask")
+    inferred_reminder_time: Optional[str] = Field(None, alias="inferredReminderTime")
+    extracted_entities: List[str] = Field(default_factory=list, alias="extractedEntities")
+    suggested_tags: List[str] = Field(default_factory=list, alias="suggestedTags")
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    requires_response: bool = Field(alias="requiresResponse")
+
+    class Config:
+        populate_by_name = True
+
 
 class MemoryType(str, Enum):
     """Types of memories that can be extracted."""

@@ -1,0 +1,29 @@
+# fly.toml app configuration file generated for echolia-backend on 2025-11-20T21:27:16+03:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'echolia-backend'
+primary_region = 'fra'
+
+[build]
+
+[env]
+  DATA_DIR = '/data'
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[[mounts]]
+  source = 'echolia_data'
+  destination = '/data'

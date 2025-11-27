@@ -33,7 +33,7 @@ class MasterDatabaseManager:
     def __init__(self):
         self.turso_org_url = settings.turso_org_url
         self.auth_token = settings.turso_auth_token
-        self.db_name = "echolia_master"
+        self.db_name = "echolia-master"
         self._connection: Optional[any] = None
 
         logger.info("master_db_manager_initialized", db_name=self.db_name)
@@ -103,6 +103,7 @@ class MasterDatabaseManager:
                 elif response.status_code == 409:
                     # Database already exists
                     logger.info("master_database_already_exists", db_name=self.db_name)
+                    self._ensure_schema()
                     return True
 
                 else:
@@ -129,8 +130,9 @@ class MasterDatabaseManager:
             result = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
             )
+            rows = result.fetchall()
 
-            if not result.rows:
+            if not rows:
                 # No schema yet, run initial migration
                 logger.info("initializing_master_schema")
                 self._run_migration_v001()
@@ -139,8 +141,9 @@ class MasterDatabaseManager:
                 result = conn.execute(
                     "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
                 )
+                version_rows = result.fetchall()
 
-                current_version = result.rows[0][0] if result.rows else 0
+                current_version = version_rows[0][0] if version_rows else 0
                 logger.info("master_schema_version_check", version=current_version)
 
                 # Run any pending migrations
@@ -239,9 +242,20 @@ class MasterDatabaseManager:
         VALUES (1, strftime('%s', 'now'));
         """
 
-        conn.execute(migration_sql)
-        conn.commit()
+        self._execute_sql_script(conn, migration_sql)
         logger.info("master_migration_v001_completed")
+
+    @staticmethod
+    def _execute_sql_script(conn, sql: str) -> None:
+        """
+        Execute a SQL script containing multiple statements.
+
+        libsql/Hrana requires one statement per execute call.
+        """
+        statements = [s.strip() for s in sql.strip().split(";") if s.strip()]
+        for statement in statements:
+            conn.execute(statement)
+        conn.commit()
 
     # ========== User Management ==========
 
@@ -306,8 +320,10 @@ class MasterDatabaseManager:
                 [provider, provider_user_id]
             )
 
-            if result.rows:
-                row = result.rows[0]
+            rows = result.fetchall()
+
+            if rows:
+                row = rows[0]
                 return {
                     "user_id": row[0],
                     "provider": row[1],
@@ -341,8 +357,10 @@ class MasterDatabaseManager:
                 [user_id]
             )
 
-            if result.rows:
-                row = result.rows[0]
+            rows = result.fetchall()
+
+            if rows:
+                row = rows[0]
                 return {
                     "user_id": row[0],
                     "provider": row[1],
@@ -431,8 +449,9 @@ class MasterDatabaseManager:
                 [user_id]
             )
 
+            rows = result.fetchall()
             devices = []
-            for row in result.rows:
+            for row in rows:
                 devices.append({
                     "device_id": row[0],
                     "user_id": row[1],
@@ -503,6 +522,7 @@ class MasterDatabaseManager:
                 [user_id]
             )
 
+            rows = result.fetchall()
             add_ons = {
                 "sync_enabled": False,
                 "ai_enabled": False,
@@ -510,7 +530,7 @@ class MasterDatabaseManager:
                 "details": []
             }
 
-            for row in result.rows:
+            for row in rows:
                 add_on_type = row[0]
                 status = row[1]
                 expires_at = row[6]
@@ -647,10 +667,12 @@ class MasterDatabaseManager:
                 [user_id, add_on_type]
             )
 
-            if not result.rows:
+            rows = result.fetchall()
+
+            if not rows:
                 return False
 
-            row = result.rows[0]
+            row = rows[0]
             status = row[0]
             expires_at = row[1]
 

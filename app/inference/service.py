@@ -9,7 +9,8 @@ from app.inference.models import (
     E2EEInferenceRequest,
     E2EEInferenceResponse,
     UsageInfo,
-    PublicKeyResponse
+    PublicKeyResponse,
+    ProviderInfo
 )
 from app.inference.crypto import e2ee_crypto
 from app.inference.tasks import task_processor
@@ -42,6 +43,12 @@ class E2EEInferenceService:
         """
         key_info = e2ee_crypto.get_public_key_info()
         return PublicKeyResponse(**key_info)
+
+    def get_provider_info(self) -> ProviderInfo:
+        """
+        Return the currently selected inference provider and model.
+        """
+        return task_processor.get_provider_info()
 
     def get_user_tier(self, user_id: str) -> str:
         """
@@ -77,8 +84,9 @@ class E2EEInferenceService:
         )
 
         requests_today = 0
-        if result.rows:
-            requests_today = result.rows[0][0]
+        rows = result.fetchall()
+        if rows:
+            requests_today = rows[0][0]
 
         # Calculate limits based on tier
         if tier == "paid":
@@ -179,13 +187,18 @@ class E2EEInferenceService:
         plaintext_content = None
         result_json = None
         encryption_key = None
+        had_decryption_error = False
 
         try:
             logger.info(
                 "e2ee_inference_start",
                 user_id=user_id,
                 task=request.task,
-                client_version=request.client_version
+                client_version=request.client_version,
+                encrypted_len=len(request.encrypted_content or ""),
+                nonce_len=len(request.nonce or ""),
+                mac_len=len(request.mac or ""),
+                client_pub_len=len(request.ephemeral_public_key or ""),
             )
 
             # 2. Derive shared secret using X25519
@@ -229,6 +242,13 @@ class E2EEInferenceService:
             )
 
         except ValueError as e:
+            had_decryption_error = True
+            logger.warning(
+                "e2ee_inference_value_error",
+                user_id=user_id,
+                task=request.task,
+                error=str(e),
+            )
             # Re-raise ValueError (quota, decryption issues)
             raise
 
@@ -249,6 +269,12 @@ class E2EEInferenceService:
                 result_json = None
             if encryption_key is not None:
                 encryption_key = None
+            logger.info(
+                "e2ee_inference_finalized",
+                user_id=user_id,
+                task=request.task,
+                decryption_failed=had_decryption_error,
+            )
 
 
 # Global service instance (will be initialized with master_db)

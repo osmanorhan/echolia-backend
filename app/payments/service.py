@@ -239,7 +239,8 @@ class PaymentService:
                 [transaction_id]
             )
 
-            return len(result.rows) > 0
+            rows = result.fetchall()
+            return len(rows) > 0
 
         except Exception as e:
             logger.error("check_receipt_duplicate_error", error=str(e))

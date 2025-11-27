@@ -192,7 +192,9 @@ class TursoDatabaseManager:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
             )
 
-            if not result.rows:
+            rows = result.fetchall()
+
+            if not rows:
                 # No schema yet, run initial migration
                 logger.info("initializing_schema", user_id=user_id)
                 self._run_migration_v001(conn)
@@ -202,7 +204,9 @@ class TursoDatabaseManager:
                     "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
                 )
 
-                current_version = result.rows[0][0] if result.rows else 0
+                version_rows = result.fetchall()
+
+                current_version = version_rows[0][0] if version_rows else 0
                 logger.info("schema_version_check", user_id=user_id, version=current_version)
 
                 # Run any pending migrations
@@ -297,9 +301,19 @@ class TursoDatabaseManager:
         VALUES (1, strftime('%s', 'now'));
         """
 
-        conn.execute(migration_sql)
-        conn.commit()
+        self._execute_sql_script(conn, migration_sql)
         logger.info("migration_v001_completed")
+
+    @staticmethod
+    def _execute_sql_script(conn, sql: str) -> None:
+        """
+        Execute a SQL script containing multiple statements.
+
+        libsql/Hrana requires one statement per execute call.
+        """
+        statements = [s.strip() for s in sql.strip().split(";") if s.strip()]
+        for statement in statements:
+            conn.execute(statement)
 
     async def list_all_user_databases(self) -> List[str]:
         """

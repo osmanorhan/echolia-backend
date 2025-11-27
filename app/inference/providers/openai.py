@@ -1,11 +1,11 @@
 """
-OpenAI GPT provider.
+OpenAI GPT provider used by the E2EE inference pipeline.
 """
 import structlog
 from openai import AsyncOpenAI
 
-from app.llm.models import InferenceRequest, InferenceResponse, UsageStats
 from app.config import settings
+from app.inference.llm_models import InferenceRequest, InferenceResponse, UsageStats
 
 
 logger = structlog.get_logger()
@@ -21,20 +21,11 @@ class OpenAIProvider:
         self.client = AsyncOpenAI(api_key=settings.openai_api_key)
 
     async def generate(self, request: InferenceRequest) -> InferenceResponse:
-        """
-        Generate response using OpenAI GPT.
-
-        Args:
-            request: Inference request
-
-        Returns:
-            InferenceResponse
-        """
+        """Generate a response using OpenAI GPT."""
         try:
             # Convert messages to OpenAI format
             messages = [
-                {"role": msg.role, "content": msg.content}
-                for msg in request.messages
+                {"role": msg.role, "content": msg.content} for msg in request.messages
             ]
 
             # Call OpenAI API
@@ -42,7 +33,7 @@ class OpenAIProvider:
                 model=request.model,
                 messages=messages,
                 max_tokens=request.max_tokens or 1024,
-                temperature=request.temperature or 1.0
+                temperature=request.temperature or 1.0,
             )
 
             # Extract response content
@@ -54,9 +45,9 @@ class OpenAIProvider:
                 usage=UsageStats(
                     input_tokens=response.usage.prompt_tokens,
                     output_tokens=response.usage.completion_tokens,
-                    total_tokens=response.usage.total_tokens
+                    total_tokens=response.usage.total_tokens,
                 ),
-                finish_reason=response.choices[0].finish_reason or "stop"
+                finish_reason=response.choices[0].finish_reason or "stop",
             )
 
         except Exception as e:

@@ -1,11 +1,11 @@
 """
-Anthropic Claude provider.
+Anthropic Claude provider used by the E2EE inference pipeline.
 """
 import structlog
 from anthropic import AsyncAnthropic
 
-from app.llm.models import InferenceRequest, InferenceResponse, UsageStats
 from app.config import settings
+from app.inference.llm_models import InferenceRequest, InferenceResponse, UsageStats
 
 
 logger = structlog.get_logger()
@@ -21,15 +21,7 @@ class AnthropicProvider:
         self.client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     async def generate(self, request: InferenceRequest) -> InferenceResponse:
-        """
-        Generate response using Anthropic Claude.
-
-        Args:
-            request: Inference request
-
-        Returns:
-            InferenceResponse
-        """
+        """Generate a response using Anthropic Claude."""
         try:
             # Convert messages to Anthropic format
             messages = [
@@ -50,7 +42,7 @@ class AnthropicProvider:
                 max_tokens=request.max_tokens or 1024,
                 temperature=request.temperature or 1.0,
                 system=system,
-                messages=messages
+                messages=messages,
             )
 
             # Extract response content
@@ -62,9 +54,10 @@ class AnthropicProvider:
                 usage=UsageStats(
                     input_tokens=response.usage.input_tokens,
                     output_tokens=response.usage.output_tokens,
-                    total_tokens=response.usage.input_tokens + response.usage.output_tokens
+                    total_tokens=response.usage.input_tokens
+                    + response.usage.output_tokens,
                 ),
-                finish_reason=response.stop_reason or "end_turn"
+                finish_reason=response.stop_reason or "end_turn",
             )
 
         except Exception as e:

@@ -197,7 +197,12 @@ class E2EECrypto:
             return encryption_key
 
         except Exception as e:
-            logger.error("shared_secret_derivation_failed", error=str(e))
+            logger.error(
+                "shared_secret_derivation_failed",
+                error=str(e),
+                client_pub_b64_len=len(client_ephemeral_public_key_b64 or ""),
+                key_id=self._key_id,
+            )
             raise ValueError("Failed to derive shared secret") from e
 
     def decrypt_content(
@@ -235,7 +240,13 @@ class E2EECrypto:
             return plaintext_bytes.decode('utf-8')
 
         except Exception as e:
-            logger.error("decryption_failed", error=str(e))
+            logger.error(
+                "decryption_failed",
+                error=str(e),
+                ciphertext_b64_len=len(ciphertext_b64 or ""),
+                nonce_b64_len=len(nonce_b64 or ""),
+                mac_b64_len=len(mac_b64 or ""),
+            )
             raise ValueError("Decryption failed - invalid encryption") from e
 
     def encrypt_response(self, plaintext: str, encryption_key: bytes) -> Tuple[str, str, str]:

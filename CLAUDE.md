@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Echolia Backend is a privacy-first sync and LLM inference service for the Echolia desktop and mobile apps. It uses **OAuth-based authentication** (Google + Apple Sign-In) with a **dual-database architecture**: a master database for users/subscriptions and per-user databases for encrypted data.
+Echolia Backend is a privacy-first sync and end-to-end encrypted (E2EE) inference service for the Echolia desktop and mobile apps. It uses **OAuth-based authentication** (Google + Apple Sign-In) with a **dual-database architecture**: a master database for users/subscriptions and per-user databases for encrypted data.
 
-**Current Status**: Phase 1 complete (OAuth authentication, master database, add-ons infrastructure). Sync, LLM, payments, and embeddings services are planned but not yet implemented.
+**Current Status**: Phase 1 complete (OAuth authentication, master database, add-ons infrastructure). E2EE inference is implemented; generic `/llm` proxy routes are disabled. Sync, payments, and embeddings services are planned but not yet implemented.
 
 **Product Philosophy**: Indie, privacy-first AI companion following Obsidian's ethical monetization model. Base app works fully offline; optional add-ons (Sync $2/mo, AI $3/mo) enhance experience. No paywalls, no dark patterns.
 
@@ -79,7 +79,7 @@ docker-compose up -d
 ### Database Management
 ```bash
 # Master database (users, devices, add-ons)
-turso db shell echolia_master
+turso db shell echolia-master
 
 # List all user databases
 turso db list | grep user_
@@ -88,14 +88,14 @@ turso db list | grep user_
 turso db shell user_<uuid>
 
 # Check schema version
-turso db shell echolia_master "SELECT * FROM schema_version;"
+turso db shell echolia-master "SELECT * FROM schema_version;"
 ```
 
 ## Architecture & Key Concepts
 
 ### Dual-Database Architecture
 
-**Master Database** (`echolia_master.db`):
+**Master Database** (`echolia-master.db`):
 - OAuth identities (Google, Apple)
 - Devices (per user, tracked in master DB)
 - Add-ons/subscriptions (Sync, AI, Supporter)
@@ -187,7 +187,7 @@ app/
 │   └── dependencies.py  # FastAPI dependencies
 ├── add_ons/             # Add-ons module (TODO - Phase 2)
 ├── payments/            # Payment verification (TODO - Phase 3)
-├── llm/                 # LLM proxy (TODO - Phase 4)
+├── inference/           # E2EE inference tasks, provider clients/models
 ├── sync/                # Sync service (TODO - Phase 5)
 └── embeddings/          # Fallback embeddings (TODO - Phase 6)
 ```
@@ -207,7 +207,7 @@ All configuration is managed via Pydantic Settings in `app/config.py`:
 - `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` - Apple Sign In credentials
 
 **Optional**:
-- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` - LLM providers (Phase 4)
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` - LLM providers (used by inference)
 - `APPLE_SHARED_SECRET`, `GOOGLE_SERVICE_ACCOUNT_JSON` - Payment verification (Phase 3)
 
 **Access via**: `from app.config import settings`
@@ -303,7 +303,7 @@ Each user database contains 7 tables:
 4. **synced_memories** - Encrypted memories (knowledge graph nodes)
 5. **synced_tags** - Encrypted tags linked to entries
 6. **entry_embeddings** - Fallback embeddings for old devices
-7. **llm_usage** - LLM API usage tracking for transparency
+7. **llm_usage** - Inference/LLM usage tracking for transparency
 
 All user data in `synced_*` tables is stored as encrypted BLOBs. The server cannot read content.
 
@@ -331,11 +331,11 @@ POST   /payments/webhook/apple  Apple webhooks
 POST   /payments/webhook/google Google webhooks
 ```
 
-### LLM (Phase 4 - Not Implemented)
+### Inference (E2EE - Implemented)
 ```
-POST   /llm/generate            Zero-knowledge inference
-GET    /llm/models              Available models
-GET    /llm/usage               Usage statistics
+GET    /inference/public-key    Get server X25519 public key
+POST   /inference/execute       Encrypted inference (memory_distillation, tagging, insight_extraction)
+GET    /inference/usage         Usage statistics
 ```
 
 ### Sync (Phase 5 - Not Implemented)
@@ -476,16 +476,26 @@ else:
 
 ## Implementation Plan
 
-See `IMPLEMENTATION_PLAN.md` for detailed implementation roadmap.
+**Current Status**: Phase 1 & 4 complete (OAuth authentication + E2EE inference).
 
-**Current Status**: Phase 1 Complete (OAuth Authentication)
+**High-Level Roadmap**:
+1. Phase 2: Add-ons management system (master DB `user_add_ons`, feature flags, `/add-ons/*` routes).
+2. Phase 3: Payment verification (App Store + Play Store receipts, webhooks, `receipts` table).
+3. Phase 5: Sync service (Sync add-on, `/sync/push|pull|status`, vector clocks + conflict resolution).
+4. Phase 6: Embeddings service (fallback embeddings for older/air-gapped devices).
 
-**Next Steps**:
-1. Phase 2: Add-Ons Management System
-2. Phase 3: Payment Verification (App Store + Play Store)
-3. Phase 4: LLM Inference Service (Zero-Knowledge)
-4. Phase 5: Sync Service
-5. Phase 6: Embeddings Service
+## Add-on Products
+
+Current product IDs (subject to change; keep code/config as source of truth):
+
+- iOS / App Store:
+  - `echolia.sync.monthly` – Sync add-on ($2/month)
+  - `echolia.ai.monthly` – AI add-on ($3/month)
+  - `echolia.support.small` – Supporter tip ($5 one-time)
+  - `echolia.support.medium` – Supporter tip ($10 one-time)
+  - `echolia.support.large` – Supporter tip ($25 one-time)
+- Android / Play Store:
+  - Mirrors the iOS product IDs above.
 
 ## Deployment
 
@@ -514,7 +524,7 @@ The architecture is optimized for low cost:
 - Test with Google OAuth Playground or Apple JWT decoder
 
 ### Master Database Issues
-- Verify master database exists: `turso db shell echolia_master`
+- Verify master database exists: `turso db shell echolia-master`
 - Check schema version: `SELECT * FROM schema_version;`
 - Recreate if needed: Delete and restart app (auto-creates)
 

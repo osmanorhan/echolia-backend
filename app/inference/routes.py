@@ -8,7 +8,8 @@ import structlog
 from app.inference.models import (
     PublicKeyResponse,
     E2EEInferenceRequest,
-    E2EEInferenceResponse
+    E2EEInferenceResponse,
+    ProviderInfo
 )
 from app.inference.service import get_inference_service
 from app.auth.dependencies import get_current_user
@@ -36,6 +37,23 @@ async def get_public_key():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve public key"
+        )
+
+
+@router.get("/provider", response_model=ProviderInfo)
+async def get_provider_info():
+    """
+    Get the currently configured inference provider and model.
+    """
+    try:
+        service = get_inference_service()
+        return service.get_provider_info()
+
+    except Exception as e:
+        logger.error("get_provider_info_failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve provider information"
         )
 
 
@@ -79,6 +97,13 @@ async def execute_inference(
 
     except ValueError as e:
         error_message = str(e)
+        logger.warning(
+            "e2ee_inference_value_error_response",
+            user_id=user_id,
+            device_id=device_id,
+            task=request.task,
+            error=error_message,
+        )
 
         if "Rate limit exceeded" in error_message:
             # Return rate limit error with usage info
@@ -97,6 +122,18 @@ async def execute_inference(
 
         elif "Decryption failed" in error_message or "Failed to derive" in error_message:
             # Encryption/decryption error
+            logger.warning(
+                "e2ee_inference_decryption_failed_response",
+                user_id=user_id,
+                device_id=device_id,
+                task=request.task,
+                encrypted_len=len(request.encrypted_content or ""),
+                nonce_len=len(request.nonce or ""),
+                mac_len=len(request.mac or ""),
+                client_pub_len=len(request.ephemeral_public_key or ""),
+                detail=error_message,
+                status_code=422,
+            )
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Decryption failed - invalid encryption"

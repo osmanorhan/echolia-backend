@@ -10,7 +10,6 @@ import logging
 
 from app.config import settings
 from app.auth.routes import router as auth_router
-from app.llm.routes import router as llm_router
 from app.inference.routes import router as inference_router
 from app.add_ons.routes import router as add_ons_router
 from app.payments.routes import router as payments_router
@@ -61,7 +60,6 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(add_ons_router)
 app.include_router(payments_router)
-app.include_router(llm_router)
 app.include_router(inference_router)
 
 
@@ -79,9 +77,23 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    inference_provider = None
+    inference_model = None
+
+    try:
+        from app.inference.service import get_inference_service
+
+        provider_info = get_inference_service().get_provider_info()
+        inference_provider = provider_info.provider
+        inference_model = provider_info.model
+    except Exception as e:
+        logger.warning("health_provider_info_unavailable", error=str(e))
+
     return {
         "status": "healthy",
-        "database": "connected"
+        "database": "connected",
+        "inference_provider": inference_provider,
+        "inference_model": inference_model
     }
 
 
@@ -99,6 +111,7 @@ async def startup_event():
     try:
         # Create master database if it doesn't exist
         await master_db_manager.create_master_database()
+        master_db_manager._ensure_schema
         logger.info("master_database_initialized")
     except Exception as e:
         logger.error("master_database_initialization_failed", error=str(e))

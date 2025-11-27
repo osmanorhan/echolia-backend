@@ -2,7 +2,7 @@
 name = "echolia-backend"
 version = "0.1.0"
 description = "Privacy-first sync and LLM inference service for Echolia"
-readme = "README.md"
+readme = "CLAUDE.md"
 requires-python = ">=3.11"
 dependencies = [
     # FastAPI and ASGI server
