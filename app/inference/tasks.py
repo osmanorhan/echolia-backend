@@ -16,7 +16,7 @@ from app.inference.models import (
     ProviderInfo,
     Memory,
     MemoryType,
-    Tag
+    Tag,
 )
 from app.inference.llm_models import InferenceRequest, Message, ModelType
 from app.inference.providers.anthropic import AnthropicProvider

@@ -26,7 +26,7 @@ Guidance for AI agents working on this repository. Based on `CLAUDE.md` plus a q
 
 ## Data Model (from CLAUDE.md)
 - Master DB tables: `users`, `user_devices`, `user_add_ons`, `receipts`, `ai_usage_quota`.
-- Per-user DB tables: `schema_version`, `device_info` (deprecated), `synced_entries`, `synced_memories`, `synced_tags`, `entry_embeddings`, `llm_usage`.
+- Per-user DB tables: `schema_version`, `device_info` (deprecated), `synced_entries`, `synced_memories`, `synced_tags`, `llm_usage`.
 
 ## API Highlights
 - Auth: `POST /auth/oauth/signin`, `POST /auth/refresh`, `GET /auth/devices`, `DELETE /auth/device/{id}`, `GET /auth/me`.

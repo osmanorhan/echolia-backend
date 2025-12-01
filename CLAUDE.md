@@ -295,15 +295,14 @@ CREATE TABLE ai_usage_quota (
 
 ### Per-User Database Schema
 
-Each user database contains 7 tables:
+Each user database contains 6 tables:
 
 1. **schema_version** - Migration tracking
 2. **device_info** - DEPRECATED (devices now in master DB)
 3. **synced_entries** - Encrypted journal entries with vector clocks
 4. **synced_memories** - Encrypted memories (knowledge graph nodes)
 5. **synced_tags** - Encrypted tags linked to entries
-6. **entry_embeddings** - Fallback embeddings for old devices
-7. **llm_usage** - Inference/LLM usage tracking for transparency
+6. **llm_usage** - Inference/LLM usage tracking for transparency
 
 All user data in `synced_*` tables is stored as encrypted BLOBs. The server cannot read content.
 

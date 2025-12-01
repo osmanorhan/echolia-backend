@@ -276,15 +276,6 @@ class TursoDatabaseManager:
         CREATE INDEX IF NOT EXISTS idx_tags_entry ON synced_tags(entry_id);
         CREATE INDEX IF NOT EXISTS idx_tags_updated ON synced_tags(updated_at);
 
-        -- Entry embeddings (fallback for old devices)
-        CREATE TABLE IF NOT EXISTS entry_embeddings (
-            entry_id TEXT PRIMARY KEY,
-            embedding BLOB NOT NULL,
-            model_version TEXT NOT NULL,
-            dimensions INTEGER NOT NULL,
-            created_at INTEGER NOT NULL
-        );
-
         -- LLM usage tracking
         CREATE TABLE IF NOT EXISTS llm_usage (
             id TEXT PRIMARY KEY,
