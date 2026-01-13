@@ -45,7 +45,8 @@ class TursoDatabaseManager:
 
     def _get_db_name(self, user_id: str) -> str:
         """Generate database name for user."""
-        return f"user_{user_id}"
+        # Turso DB names can only contain lowercase letters, numbers, and dashes
+        return f"user-{user_id}"
 
     def _get_db_url(self, db_name: str) -> str:
         """Generate Turso database URL."""
@@ -175,6 +176,67 @@ class TursoDatabaseManager:
 
         except Exception as e:
             logger.error("database_creation_error", user_id=user_id, error=str(e))
+            raise
+
+    async def create_database_token(self, user_id: str, expiration: str = "never") -> Optional[str]:
+        """
+        Create an auth token for the user's database.
+
+        Args:
+            user_id: User's UUID
+            expiration: "never" or duration string (e.g. "1d")
+
+        Returns:
+            JWT token string or None if failed
+        """
+        db_name = self._get_db_name(user_id)
+
+        try:
+            async with httpx.AsyncClient() as client:
+                url = f"https://api.turso.tech/v1/organizations/{self.turso_org_url.split('.')[0]}/databases/{db_name}/auth/tokens"
+                if expiration != "never":
+                    url += f"?expiration={expiration}"
+
+                # Retry loop
+                max_retries = 3
+                for attempt in range(max_retries):
+                    response = await client.post(
+                        url,
+                        headers={
+                            "Authorization": f"Bearer {self.auth_token}",
+                        },
+                        timeout=10.0
+                    )
+                    
+                    if response.status_code == 200:
+                        break # Success
+                        
+                    if response.status_code == 404 and attempt < max_retries - 1:
+                        # Database might not be ready yet
+                        logger.warning("token_creation_retry", attempt=attempt+1, user_id=user_id, url=url)
+                        await asyncio.sleep(2.0)
+                        continue
+                    
+                    # Stop if other error or max retries
+                    break
+
+                if response.status_code == 200:
+                    data = response.json()
+                    token = data.get("jwt")
+                    logger.info("token_created", user_id=user_id, db_name=db_name)
+                    return token
+                else:
+                    logger.error(
+                        "token_creation_failed",
+                        user_id=user_id,
+                        status=response.status_code,
+                        url=url,
+                        response=response.text
+                    )
+                    return None
+
+        except Exception as e:
+            logger.error("token_creation_error", user_id=user_id, error=str(e))
             raise
 
     def _ensure_schema(self, conn, user_id: str) -> None:

@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # Turso Database Configuration
     turso_org_url: str
     turso_auth_token: str
+    turso_org_url: str
+    turso_auth_token: str
+    master_db_url: Optional[str] = None
+    master_db_auth_token: Optional[str] = None
     embedded_replica: bool = True
     sync_interval: int = 60  # seconds
     max_cached_connections: int = 100
@@ -32,7 +36,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
 
     # OAuth Providers
-    google_client_id: Optional[str] = None
+    google_client_id: Optional[str] = "511539027671-2dvdj0dvc5frlg5f93bf0oed13uqa84l.apps.googleusercontent.com"
     google_client_secret: Optional[str] = None
     apple_team_id: Optional[str] = None
     apple_key_id: Optional[str] = None

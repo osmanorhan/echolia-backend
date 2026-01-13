@@ -11,7 +11,10 @@ from datetime import datetime
 class OAuthSignInRequest(BaseModel):
     """OAuth sign-in request from mobile/desktop app."""
     provider: str = Field(..., pattern="^(google|apple)$")
-    id_token: str = Field(..., description="JWT token from OAuth provider")
+    id_token: Optional[str] = Field(None, description="JWT token from OAuth provider (if simplified flow)")
+    code: Optional[str] = Field(None, description="Auth code from OAuth provider (if server-side exchange)")
+    redirect_uri: Optional[str] = Field(None, description="Redirect URI used for the code")
+    code_verifier: Optional[str] = Field(None, description="PKCE verifier")
     device_id: str = Field(..., description="Platform device ID")
     device_name: str = Field(..., description="User-friendly device name")
     platform: str = Field(..., pattern="^(ios|android|macos|windows|linux)$")
@@ -33,6 +36,8 @@ class OAuthSignInResponse(BaseModel):
     expires_in: int  # seconds
     user_id: str
     add_ons: UserAddOns
+    turso_db_url: Optional[str] = None
+    turso_auth_token: Optional[str] = None
 
 
 # ========== Token Models ==========

@@ -40,36 +40,84 @@ class MasterDatabaseManager:
 
     def _get_db_url(self) -> str:
         """Generate Turso database URL for master database."""
+        if settings.master_db_url:
+            return settings.master_db_url
         return f"libsql://{self.db_name}-{self.turso_org_url}"
 
-    def get_connection(self):
-        """
-        Get or create database connection to master database.
+    async def _generate_db_token(self) -> str:
+        """Generate a short-lived token for master DB access."""
+        try:
+            async with httpx.AsyncClient() as client:
+                url = f"https://api.turso.tech/v1/organizations/{self.turso_org_url.split('.')[0]}/databases/{self.db_name}/auth/tokens?expiration=1d"
+                response = await client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {self.auth_token}"},
+                    timeout=10.0
+                )
+                if response.status_code == 200:
+                    return response.json().get("jwt")
+                else:
+                    raise Exception(f"Failed to generate token: {response.text}")
+        except Exception as e:
+            logger.error("master_token_generation_failed", error=str(e))
+            raise
 
-        Returns:
-            Turso database connection
-        """
+    async def get_connection_async(self):
+        """Async version of get_connection to support token generation."""
         if self._connection is not None:
             return self._connection
 
         db_url = self._get_db_url()
+        token = await self._generate_db_token()
 
-        try:
-            # Direct connection (no embedded replica for master db)
-            self._connection = libsql.connect(
-                db_url,
-                auth_token=self.auth_token
-            )
-            logger.info("master_database_connected", db_name=self.db_name)
+        self._connection = libsql.connect(db_url, auth_token=token)
+        logger.info("master_database_connected", db_name=self.db_name)
+        # Note: _ensure_schema needs to be called carefully as it is sync
+        # For now, we assume schema is checked at startup manually or we refactor _ensure_schema
+        return self._connection
 
-            # Ensure schema is up to date
-            self._ensure_schema()
-
+    def get_connection(self):
+        """
+        Get or create database connection to master database.
+        """
+        if self._connection is not None:
             return self._connection
 
+        if settings.master_db_auth_token:
+             # Use configured DB token
+             token = settings.master_db_auth_token
+             db_url = self._get_db_url()
+             self._connection = libsql.connect(db_url, auth_token=token)
+             self._ensure_schema()
+             return self._connection
+
+        # Automatic token generation from platform token
+        # Block to get token
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+             # We are likely inside a FastAPI request handling loop
+             pass
+             
+        # Fallback to sync version using requests
+        import requests
+        try:
+             org = self.turso_org_url.split('.')[0]
+             url = f"https://api.turso.tech/v1/organizations/{org}/databases/{self.db_name}/auth/tokens?expiration=1d"
+             resp = requests.post(url, headers={"Authorization": f"Bearer {self.auth_token}"}, timeout=10)
+             if resp.status_code == 200:
+                 token = resp.json().get("jwt")
+             else:
+                 raise Exception(f"Token gen failed: {resp.text}")
         except Exception as e:
-            logger.error("master_database_connection_failed", error=str(e))
-            raise
+             logger.error("sync_token_gen_failed", error=str(e))
+             raise
+             
+        db_url = self._get_db_url()
+        self._connection = libsql.connect(db_url, auth_token=token)
+        self._ensure_schema()
+        return self._connection
+
+
 
     async def create_master_database(self) -> bool:
         """

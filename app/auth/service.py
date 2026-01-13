@@ -66,8 +66,14 @@ class AuthService:
             platform=request.platform
         )
 
-        # Step 1: Verify OAuth token
-        oauth_user_info = verify_oauth_token(request.provider, request.id_token)
+        # Step 1: Verify OAuth token or Exchange Code
+        if request.code and request.provider == "google":
+             # Exchange code for ID token
+             oauth_user_info = await self._exchange_google_code(request.code, request.redirect_uri, request.code_verifier)
+        elif request.id_token:
+            oauth_user_info = verify_oauth_token(request.provider, request.id_token)
+        else:
+             raise ValueError("Either id_token or code is required")
 
         if oauth_user_info is None:
             logger.error("oauth_token_verification_failed", provider=request.provider)
@@ -104,6 +110,11 @@ class AuthService:
         from app.config import settings
         expires_in = settings.access_token_expire_minutes * 60
 
+        # Get Turso credentials
+        turso_token = await self.user_db_manager.create_database_token(user_id)
+        db_name = self.user_db_manager._get_db_name(user_id)
+        turso_db_url = self.user_db_manager._get_db_url(db_name)
+
         logger.info(
             "oauth_signin_success",
             user_id=user_id,
@@ -117,8 +128,63 @@ class AuthService:
             token_type="bearer",
             expires_in=expires_in,
             user_id=user_id,
-            add_ons=add_ons
+            add_ons=add_ons,
+            turso_db_url=turso_db_url,
+            turso_auth_token=turso_token
         )
+
+    async def _exchange_google_code(self, code: str, redirect_uri: Optional[str], code_verifier: Optional[str]) -> Optional[OAuthUserInfo]:
+        """
+        Exchange auth code for ID token with Google.
+        """
+        import httpx
+        from app.config import settings
+        
+        # We need client secret here
+        if not settings.google_client_id:
+             logger.error("google_client_id_not_configured")
+             return None
+             
+        # Try to find secret? 
+        # For "Installed App" flow, the secret is not really secret, but google requires it.
+        # We assume it is configured in settings.
+        client_secret = settings.google_client_secret
+        if not client_secret:
+             # Fallback to the one we know? Better to configure it.
+             logger.error("google_client_secret_not_configured")
+             return None
+
+        # Build request
+        data = {
+            "client_id": settings.google_client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": redirect_uri or "http://localhost:1420"
+        }
+        
+        if code_verifier:
+            data["code_verifier"] = code_verifier
+            
+        try:
+             async with httpx.AsyncClient() as client:
+                 resp = await client.post("https://oauth2.googleapis.com/token", data=data)
+                 if resp.status_code != 200:
+                      logger.error("google_exchange_failed", status=resp.status_code, response=resp.text)
+                      return None
+                      
+                 tokens = resp.json()
+                 id_token = tokens.get("id_token")
+                 if not id_token:
+                      logger.error("google_exchange_no_id_token")
+                      return None
+                      
+                 # Verify the token we just got
+                 return verify_oauth_token("google", id_token)
+                 
+        except Exception as e:
+             logger.error("google_exchange_exception", error=str(e))
+             return None
 
     async def _get_or_create_user(self, oauth_user_info: OAuthUserInfo) -> str:
         """
