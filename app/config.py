@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     apple_team_id: Optional[str] = None
     apple_key_id: Optional[str] = None
     apple_private_key: Optional[str] = None
+    # List of allowed client IDs (audiences) for Apple Sign In (e.g. mobile bundle ID, desktop service ID)
+    apple_client_ids: list[str] = ["com.monokok.echolia", "com.echolia.echolia", "com.echolia.desktop.service"]
 
     # LLM Provider API Keys (Optional)
     anthropic_api_key: Optional[str] = None

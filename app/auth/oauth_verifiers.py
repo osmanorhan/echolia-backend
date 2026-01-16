@@ -183,7 +183,7 @@ class AppleTokenVerifier:
                 id_token_string,
                 public_key,
                 algorithms=['RS256'],
-                audience=settings.apple_team_id,  # Your Apple app's client ID
+                audience=settings.apple_client_ids + ([settings.apple_team_id] if settings.apple_team_id else []),
                 issuer=self.APPLE_ISSUER
             )
 

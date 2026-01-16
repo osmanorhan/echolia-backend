@@ -1,7 +1,8 @@
 """
 Authentication API routes for OAuth-based authentication.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Form
+from fastapi.responses import HTMLResponse
 from typing import Tuple
 import structlog
 
@@ -69,6 +70,65 @@ async def oauth_signin(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="OAuth sign-in failed"
         )
+
+
+# ========== Apple Sign-In Callback ==========
+
+@router.post("/apple/callback", response_class=HTMLResponse)
+async def apple_callback(
+    code: str = Form(None),
+    id_token: str = Form(None),
+    user: str = Form(None),
+    error: str = Form(None)
+):
+    """
+    Handle Apple Sign-In callback (Form POST).
+    Apple sends code/id_token here. We display it to the user to copy.
+    """
+    if error:
+        return f"""
+        <html>
+            <body style="background-color: #111; color: #eee; font-family: system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;">
+                <h1 style="color: #ff6b6b;">Sign In Failed</h1>
+                <p>Error: {error}</p>
+            </body>
+        </html>
+        """
+
+    if not code:
+         return f"""
+        <html>
+            <body style="background-color: #111; color: #eee; font-family: system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;">
+                <h1 style="color: #ff6b6b;">Sign In Failed</h1>
+                <p>No authorization code received from Apple.</p>
+            </body>
+        </html>
+        """
+        
+    return f"""
+    <html>
+        <body style="background-color: #111; color: #fff; font-family: system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0;">
+            <div style="background: #222; padding: 40px; border-radius: 12px; text-align: center; max-width: 600px; width: 90%;">
+                <h1 style="color: #4ade80; margin-bottom: 20px;">Sign In Successful!</h1>
+                <p style="margin-bottom: 20px; color: #ccc;">Please copy the code below and paste it into the Echolia app:</p>
+                <div style="position: relative;">
+                    <textarea readonly id="code" style="width: 100%; height: 100px; background: #333; color: #fff; border: 1px solid #444; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 14px; resize: none;" onclick="this.select()">{code}</textarea>
+                    <button onclick="copyCode()" style="margin-top: 10px; background: #4ade80; color: #000; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: opacity 0.2s;">Copy Code</button>
+                </div>
+                <p style="margin-top: 20px; font-size: 0.9em; color: #888;">You can close this window after copying.</p>
+            </div>
+            <script>
+                function copyCode() {{
+                    var copyText = document.getElementById("code");
+                    copyText.select();
+                    copyText.setSelectionRange(0, 99999);
+                    navigator.clipboard.writeText(copyText.value);
+                    alert("Copied to clipboard!");
+                }}
+            </script>
+        </body>
+    </html>
+    """
 
 
 # ========== Token Management ==========
