@@ -197,6 +197,8 @@ class MasterDatabaseManager:
                 # Run any pending migrations
                 if current_version < 1:
                     self._run_migration_v001()
+                if current_version < 2:
+                    self._run_migration_v002()
 
         except Exception as e:
             logger.error("master_schema_check_failed", error=str(e))
@@ -292,6 +294,22 @@ class MasterDatabaseManager:
 
         self._execute_sql_script(conn, migration_sql)
         logger.info("master_migration_v001_completed")
+
+    def _run_migration_v002(self) -> None:
+        """Add sync_enabled column to users table."""
+        conn = self.get_connection()
+
+        migration_sql = """
+        -- Deprecated: sync_enabled column is no longer used.
+        -- We rely on user_add_ons table.
+        
+        -- Update schema version
+        INSERT INTO schema_version (version, applied_at)
+        VALUES (2, strftime('%s', 'now'));
+        """
+
+        self._execute_sql_script(conn, migration_sql)
+        logger.info("master_migration_v002_skipped")
 
     @staticmethod
     def _execute_sql_script(conn, sql: str) -> None:
@@ -676,6 +694,9 @@ class MasterDatabaseManager:
                     1 if auto_renew else 0, current_time, current_time
                 ]
             )
+
+
+
             conn.commit()
 
             logger.info(
