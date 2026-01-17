@@ -165,6 +165,17 @@ class AppleTokenVerifier:
                 logger.error("apple_token_missing_kid")
                 return None
 
+            # Pull unverified claims for logging/debugging only.
+            unverified_claims = jwt.decode(
+                id_token_string,
+                options={
+                    "verify_signature": False,
+                    "verify_aud": False,
+                    "verify_iss": False,
+                },
+            )
+            token_aud = unverified_claims.get("aud")
+
             # Get Apple's public keys
             public_keys = self._get_apple_public_keys()
 
@@ -210,7 +221,7 @@ class AppleTokenVerifier:
             logger.error("apple_token_expired")
             return None
         except jwt.InvalidTokenError as e:
-            logger.error("apple_token_invalid", error=str(e))
+            logger.error("apple_token_invalid", error=str(e), aud=token_aud)
             return None
         except Exception as e:
             logger.error("apple_token_verification_error", error=str(e))
